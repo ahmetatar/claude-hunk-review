@@ -137,7 +137,7 @@ const pairMarks = (del: DiffLine, add: DiffLine) => {
 }
 
 /** A hunk as numbered display lines, with word-level marks on paired -/+ lines. */
-export const hunkLines = (hunk: ReviewHunk): DiffLine[] => {
+export const hunkLines = (hunk: Pick<ReviewHunk, 'text'>): DiffLine[] => {
   const raw = splitLines(hunk.text)
   const m = HEADER.exec(raw[0] ?? '')
   let oldNo = m ? Number(m[1]) : 1

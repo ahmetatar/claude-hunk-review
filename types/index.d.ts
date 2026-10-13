@@ -36,9 +36,15 @@ export type ReviewComment = {
   path: string
   /** The hunk the comment is about; follows the hunk when Claude edits it again. */
   hunkId: string
-  /** Where the hunk was (new-side line) when the comment was written or last re-attached. */
+  /** The line the comment is about: new-file line number, or old-file when `isOld` (a removed line). */
   line: number
-  /** First changed line of the hunk: what the comment is anchored to when ids drift. */
+  isOld: boolean
+  /** That line's text, so the comment can be re-found when line numbers drift. */
+  lineText: string
+  /** New-file lines the hunk covered when the comment was written. */
+  from: number
+  to: number
+  /** First changed line of the hunk: what the hunk is recognised by when its id drifts. */
   snippet: string
   /** The hunk as written when the comment was made, so the comment survives accept/undo. */
   hunk: string
@@ -67,6 +73,8 @@ declare module 'claude-code' {
       comments: ReviewComment[]
       /** `<path>\n<hunkId>` of the hunk whose comment is being written; empty when none. */
       composing: string
+      /** Line cursor inside the selected hunk's diff: an index into its lines, -1 for none. */
+      cursor: number
     }
   }
 }

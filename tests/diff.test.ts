@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { allPatch, countHunks, hunkLines, hunkPatch, hunkSummary, parseDiff, rowsOf } from '../hooks/diff'
-import { buildPrompt, forHunk, isAttached, makeComment, reattach, unresolved } from '../hooks/comments'
+import { buildPrompt, forHunk, isAttached, lineTarget, makeComment, onLine, reattach, unresolved } from '../hooks/comments'
 import { langOf, markRange, tokenize } from '../hooks/highlight'
 
 const MODIFIED = `diff --git a/src/a.js b/src/a.js
@@ -140,12 +140,18 @@ test('a hunk summary names the first changed line', async () => {
   expect(sum.line).toBe(2)
 })
 
-test('comments follow an edited hunk and build a prompt', async () => {
+test('comments follow an edited hunk and build a prompt about one line', async () => {
   const files = parseDiff(MODIFIED)
   const hunk = files[0]!.hunks[1]!
-  const c = makeComment(files[0]!, hunk, 'use const here', 1)
+  // Lines of the hunk: ctx(20), del y(21), add z(22), ctx. The cursor sits on the added line.
+  const target = lineTarget(hunk, 2)
+  expect(target.line).toBe(22)
+  expect(target.isOld).toBe(false)
+  const c = makeComment(files[0]!, hunk, 'use const here', 1, target)
   expect(isAttached(c, files)).toBe(true)
   expect(forHunk([c], 'src/a.js', hunk.id).length).toBe(1)
+  expect(onLine(c, { line: 22, isOld: false })).toBe(true)
+  expect(onLine(c, { line: 22, isOld: true })).toBe(false)
 
   // Claude rewrites the same region: the hunk id changes, the line barely moves.
   const edited = parseDiff(MODIFIED.replace('-y\n+z', '-y\n+zz'))
@@ -159,8 +165,13 @@ test('comments follow an edited hunk and build a prompt', async () => {
   expect(reattach([c], far)[0]?.hunkId).toBe(c.hunkId)
 
   const prompt = buildPrompt([c])
-  expect(prompt.includes('src/a.js:21')).toBe(true)
+  expect(prompt.includes('src/a.js:22')).toBe(true)
   expect(prompt.includes('> use const here')).toBe(true)
+  expect(prompt.includes('\u25ba 22 +z')).toBe(true)
+  expect(prompt.includes('Make only the change')).toBe(true)
   expect(prompt.includes('```diff')).toBe(true)
   expect(unresolved([{ ...c, status: 'resolved' }]).length).toBe(0)
+
+  const removed = buildPrompt([makeComment(files[0]!, hunk, 'keep it', 2, lineTarget(hunk, 1))])
+  expect(removed.includes('removed line 21')).toBe(true)
 })

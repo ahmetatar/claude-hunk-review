@@ -45,7 +45,8 @@ test('writing a comment shows it under the hunk and marks the list row', async (
     requestId: 'review',
     props: { bodyColumns: 100, placement: 'dock', isFocused: true, scroll: { offset: 0, bodyRows: 40 } },
   })
-  await ui.press({ key: 'comment' })
+  await ui.press({ key: 'next line' })
+  await ui.press({ key: 'comment line 8' })
   expect(await ui.find({ key: 'comment' })).toBeDefined()
   await ui.input({ key: 'comment', text: 'log the request id too' })
   expect(await ui.find({ type: 'Text', text: /log the request id too/ })).toBeDefined()

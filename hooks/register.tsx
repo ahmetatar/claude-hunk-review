@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { ReviewComment, ReviewFile, ReviewHunk, ReviewSnapshot } from '../types'
-import { buildContext, buildPrompt, describe, forHunk, makeComment, reattach, unresolved } from './comments'
+import { buildContext, buildPrompt, describe, forHunk, lineTarget, makeComment, onLine, reattach, unresolved } from './comments'
 import { DEMO_DIFF } from './demo'
 import { allPatch, countHunks, filePatch, hunkLines, hunkPatch, hunkSummary, parseDiff, rowsOf } from './diff'
 import { langOf, markRange, tokenize } from './highlight'
@@ -39,10 +39,11 @@ const confirmAtom = atom({ plugin: 'hunk-review', key: 'confirm' } as const, '')
 const diffOffsetAtom = atom({ plugin: 'hunk-review', key: 'diffOffset' } as const, 0)
 const commentsAtom = atom({ plugin: 'hunk-review', key: 'comments' } as const, [] as ReviewComment[])
 const composingAtom = atom({ plugin: 'hunk-review', key: 'composing' } as const, '')
+const cursorAtom = atom({ plugin: 'hunk-review', key: 'cursor' } as const, -1)
 
 const STORE_COMMENTS = 'comments'
 const KEEP_RESOLVED_MS = 14 * 24 * 3600 * 1000
-const keyOf = (path: string, hunkId: string) => `${path}\n${hunkId}`
+const keyOf = (path: string, hunkId: string, line: number, isOld: boolean) => `${path}\n${hunkId}\n${line}${isOld ? 'o' : 'n'}`
 
 type UndoEntry = { at: number; label: string; patch: string }
 type Verb = 'accept' | 'undo'
@@ -158,6 +159,7 @@ const act = ($: Api, verb: Verb, scope: Scope): Promise<void> =>
   serial(async () => {
     await update($, confirmAtom, () => '')
     await update($, composingAtom, () => '')
+    await update($, cursorAtom, () => -1)
     const was = await read($, snapshotAtom)
     const selected = await read($, selectedAtom)
     const row = rowsOf(was.files)[selected]
@@ -214,6 +216,7 @@ const select = ($: Api, index: number) =>
     update($, diffOffsetAtom, () => 0),
     update($, confirmAtom, () => ''),
     update($, composingAtom, () => ''),
+    update($, cursorAtom, () => -1),
   ])
 
 const move = async ($: Api, delta: number) => {
@@ -246,7 +249,8 @@ const selectedHunk = async ($: Api): Promise<Chosen> => {
 const startComment = async ($: Api) => {
   const picked = await selectedHunk($)
   if (!picked) return say($, 'Select a hunk to comment on.')
-  const key = keyOf(picked.file.path, picked.hunk.id)
+  const target = lineTarget(picked.hunk, await read($, cursorAtom))
+  const key = keyOf(picked.file.path, picked.hunk.id, target.line, target.isOld)
   await update($, composingAtom, now => (now === key ? '' : key))
   await say($, '')
 }
@@ -259,7 +263,8 @@ const saveComment = ($: Api, text: string) =>
     if (!picked) return
     const body = text.trim()
     const { file, hunk } = picked
-    const existing = forHunk(await read($, commentsAtom), file.path, hunk.id)[0]
+    const target = lineTarget(hunk, await read($, cursorAtom))
+    const existing = forHunk(await read($, commentsAtom), file.path, hunk.id).find(c => onLine(c, target))
     if (body === '') {
       if (!existing) return
       await setComments($, list => list.filter(c => c.id !== existing.id))
@@ -269,7 +274,7 @@ const saveComment = ($: Api, text: string) =>
       await setComments($, list => list.map(c => (c.id === existing.id ? { ...c, text: body, status: 'open' as const } : c)))
       return say($, 'Comment updated.')
     }
-    await setComments($, list => [...list, makeComment(file, hunk, body, Date.now())])
+    await setComments($, list => [...list, makeComment(file, hunk, body, Date.now(), target)])
     await say($, 'Comment saved. m sends it to Claude, e puts it in the prompt box.')
   })
 
@@ -298,6 +303,24 @@ const sendComments = ($: Api, mode: 'submit' | 'fill'): Promise<string> =>
     $.prompt.submit({ text, asUser: true }).catch(() => undefined)
     return `Sent ${count} to Claude.`
   })
+
+/** Moves the line cursor within the selected hunk; the first press lands on its first changed line. */
+const moveCursor = async ($: Api, direction: 1 | -1) => {
+  const snap = await read($, snapshotAtom)
+  const row = rowsOf(snap.files)[await read($, selectedAtom)]
+  const hunk = row ? snap.files[row.fileIndex]?.hunks[row.hunkIndex] : undefined
+  if (!hunk) return
+  const lines = hunkLines(hunk)
+  const isReal = (i: number) => lines[i] !== undefined && lines[i]?.kind !== 'meta'
+  const firstChanged = Math.max(0, lines.findIndex(l => l.kind === 'add' || l.kind === 'del'))
+  await update($, composingAtom, () => '')
+  await update($, cursorAtom, now => {
+    if (now < 0) return firstChanged
+    let next = now + direction
+    while (next >= 0 && next < lines.length && !isReal(next)) next += direction
+    return next >= 0 && next < lines.length ? next : now
+  })
+}
 
 const summary = (snap: ReviewSnapshot): string =>
   snap.error ?? (snap.files.length === 0
@@ -407,6 +430,7 @@ export const register: Register = (on, options) => {
     const diffOffset = await read($, diffOffsetAtom)
     const allComments = await read($, commentsAtom)
     const composing = await read($, composingAtom)
+    const cursor = await read($, cursorAtom)
     const rows = rowsOf(snap.files)
     const current = rows[selected]
     const file = current ? snap.files[current.fileIndex] : undefined
@@ -416,7 +440,11 @@ export const register: Register = (on, options) => {
     const isDocked = e.props.placement === 'dock'
     const IW = W - 2
     const here = file && hunk ? forHunk(allComments, file.path, hunk.id) : []
-    const isComposing = file !== undefined && hunk !== undefined && composing === keyOf(file.path, hunk.id)
+    const target = hunk ? lineTarget(hunk, cursor) : undefined
+    const onTarget = target ? here.find(c => onLine(c, target)) : undefined
+    const isComposing =
+      file !== undefined && hunk !== undefined && target !== undefined &&
+      composing === keyOf(file.path, hunk.id, target.line, target.isOld)
     const openComments = unresolved(allComments)
     const commentRows = here.reduce((n, c) => n + Math.ceil((c.text.length + 10) / Math.max(10, IW)), 0)
 
@@ -454,7 +482,10 @@ export const register: Register = (on, options) => {
     const lines = hunk ? hunkLines(hunk) : []
     const needsScroll = lines.length > budget
     const size = needsScroll ? budget - 1 : budget
-    const offset = Math.max(0, Math.min(diffOffset, Math.max(0, lines.length - size)))
+    let offset = Math.max(0, Math.min(diffOffset, Math.max(0, lines.length - size)))
+    // The line cursor stays in view.
+    if (cursor >= 0 && cursor < offset) offset = cursor
+    if (cursor >= offset + size) offset = Math.min(Math.max(0, lines.length - size), cursor - size + 1)
     const shown = lines.slice(offset, offset + size)
     const digits = String(Math.max(...lines.map(l => Math.max(l.oldNo ?? 0, l.newNo ?? 0)), 1)).length
     const num = (n: number | undefined) => (n === undefined ? ' '.repeat(digits) : String(n).padStart(digits))
@@ -538,16 +569,18 @@ export const register: Register = (on, options) => {
           </Box>
           <Box flexDirection="column" flexGrow={1} width={IW} backgroundColor={pal.bg}>
             {!hunk && file && <Text color={pal.dim}>  {file.kind} file: accept or undo it as a whole.</Text>}
-            {shown.map(l => {
+            {shown.flatMap((l, shownIndex) => {
               const isChanged = l.kind === 'add' || l.kind === 'del'
-              const bg = l.kind === 'add' ? pal.addBg : l.kind === 'del' ? pal.delBg : undefined
+              const isCursor = offset + shownIndex === cursor
+              const bg = l.kind === 'add' ? pal.addBg : l.kind === 'del' ? pal.delBg : isCursor ? pal.selected : undefined
               const wordBg = l.kind === 'add' ? pal.addWord : pal.delWord
               const edge = l.kind === 'add' ? pal.addFg : pal.delFg
               const tokens = l.kind === 'meta' ? [] : markRange(tokenize(l.text, lang), isChanged ? l.mark : undefined)
-              return (
+              const lineComments = here.filter(c => l.kind !== 'meta' && onLine(c, { line: l.newNo ?? l.oldNo ?? 0, isOld: l.kind === 'del' }))
+              const row = (
                 <Box width={IW} backgroundColor={bg}>
                   <Text wrap="truncate-end">
-                    <Text color={edge}>{isChanged ? '▎' : ' '}</Text>
+                    <Text color={isCursor ? pal.accent : edge} bold={isCursor}>{isCursor ? '▶' : isChanged ? '▎' : ' '}</Text>
                     <Text color={pal.gutter}>{num(l.oldNo)} {num(l.newNo)} </Text>
                     <Text bold color={edge}>{l.kind === 'add' ? '+' : l.kind === 'del' ? '−' : ' '} </Text>
                     {l.kind === 'meta' && <Text italic color={pal.dim}>{l.text}</Text>}
@@ -564,16 +597,30 @@ export const register: Register = (on, options) => {
                   </Text>
                 </Box>
               )
+              return [
+                row,
+                ...lineComments.map(c => (
+                  <Box width={IW} backgroundColor={pal.bar}>
+                    <Text wrap="wrap">
+                      <Text color={pal.accent}>{' '.repeat(digits * 2 + 3)}▎ ✎ </Text>
+                      <Text color={pal.text}>{c.text}</Text>
+                      {c.status === 'sent' && <Text color={pal.dim}>  sent</Text>}
+                    </Text>
+                  </Box>
+                )),
+              ]
             })}
-            {here.map(c => (
-              <Box width={IW} backgroundColor={pal.bar}>
-                <Text wrap="wrap">
-                  <Text color={pal.accent}>▎ ✎ </Text>
-                  <Text color={pal.text}>{c.text}</Text>
-                  {c.status === 'sent' && <Text color={pal.dim}>  sent</Text>}
-                </Text>
-              </Box>
-            ))}
+            {here
+              .filter(c => !lines.some(l => l.kind !== 'meta' && onLine(c, { line: l.newNo ?? l.oldNo ?? 0, isOld: l.kind === 'del' })))
+              .map(c => (
+                <Box width={IW} backgroundColor={pal.bar}>
+                  <Text wrap="wrap">
+                    <Text color={pal.accent}>▎ ✎ </Text>
+                    <Text color={pal.dim}>L{c.line} </Text>
+                    <Text color={pal.text}>{c.text}</Text>
+                  </Text>
+                </Box>
+              ))}
             {needsScroll && (
               <Text color={pal.dim}>
                 {offset > 0 ? ' ↑' : '  '} lines {offset + 1}–{Math.min(lines.length, offset + size)} of {lines.length}
@@ -587,8 +634,8 @@ export const register: Register = (on, options) => {
           <Input
             key="comment"
             label="✎ "
-            placeholder="comment on this hunk · Enter saves · Enter on empty cancels"
-            value={here[0]?.text ?? ''}
+            placeholder={`comment on line ${target?.line ?? ''} · Enter saves · Enter on empty cancels`}
+            value={onTarget?.text ?? ''}
             submitLabel="save"
             autoFocus
             onSubmit={(text: string) => void saveComment($, text)}
@@ -598,6 +645,8 @@ export const register: Register = (on, options) => {
         <Box flexWrap="wrap" columnGap={2}>
           {hotkey('j', 'next', () => move($, 1))}
           {hotkey('k', 'prev', () => move($, -1))}
+          {hotkey('n', 'next line', () => moveCursor($, 1))}
+          {hotkey('p', 'prev line', () => moveCursor($, -1))}
           {hotkey('s', 'scroll ↓', () => scrollDiff($, 1))}
           {hotkey('w', 'scroll ↑', () => scrollDiff($, -1))}
           {hotkey('g', 'refresh', () => serial(() => refresh($)))}
@@ -617,7 +666,7 @@ export const register: Register = (on, options) => {
           }, pal.delFg)}
         </Box>
         <Box flexWrap="wrap" columnGap={2}>
-          {hotkey('c', here.length > 0 ? 'edit comment' : 'comment', () => startComment($), pal.accent)}
+          {hotkey('c', onTarget ? 'edit comment' : target ? `comment line ${target.line}` : 'comment', () => startComment($), pal.accent)}
           {hotkey('x', 'resolve', () => resolveSelected($), pal.accent)}
           {hotkey('m', `send to Claude${openComments.length > 0 ? ` (${openComments.length})` : ''}`, async () => say($, await sendComments($, 'submit')), pal.accent)}
           {hotkey('e', 'edit in prompt', async () => say($, await sendComments($, 'fill')), pal.accent)}
