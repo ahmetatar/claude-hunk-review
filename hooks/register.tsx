@@ -460,6 +460,13 @@ export const register: Register = (on, options) => {
     const num = (n: number | undefined) => (n === undefined ? ' '.repeat(digits) : String(n).padStart(digits))
     const lang = file ? langOf(file.path) : 'plain'
 
+    // Esc hands the keyboard back, which hides the field; the comment it held is
+    // over too, so a later click into the pane does not bring the field back.
+    // A render never writes, so the reset is left to a timer.
+    if (composing !== '' && e.props.isFocused === false) {
+      $.clock.after(0, () => void update($, composingAtom, () => ''))
+    }
+
     const hotkey = (key: string, label: string, onPress: () => unknown, color?: string) => (
       <Button key={label} plain hotkey={key} onPress={onPress}>
         <Text color={color}>{label}</Text>
