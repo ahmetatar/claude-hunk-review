@@ -4,6 +4,26 @@ import { type DiffLine, hash, hunkLines, hunkSummary } from './diff'
 const HUNK_CAP = 2500
 const EXCERPT_LINES = 30
 
+/** Fills what comments saved by earlier versions lack, so an old store never breaks a send. */
+export const normalize = (c: Partial<ReviewComment> & Pick<ReviewComment, 'id' | 'path' | 'text'>): ReviewComment => {
+  const line = typeof c.line === 'number' ? c.line : 0
+  return {
+    id: c.id,
+    path: c.path,
+    hunkId: c.hunkId ?? '',
+    line,
+    isOld: c.isOld ?? false,
+    lineText: c.lineText ?? c.snippet ?? '',
+    from: c.from ?? line,
+    to: c.to ?? line,
+    snippet: c.snippet ?? '',
+    hunk: c.hunk ?? '',
+    text: c.text,
+    status: c.status ?? 'open',
+    createdAt: c.createdAt ?? 0,
+  }
+}
+
 export const isOpen = (c: ReviewComment) => c.status !== 'resolved'
 
 export const unresolved = (list: readonly ReviewComment[]): ReviewComment[] => list.filter(isOpen)

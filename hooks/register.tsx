@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { ReviewComment, ReviewFile, ReviewHunk, ReviewSnapshot } from '../types'
-import { buildContext, buildPrompt, describe, forHunk, lineTarget, makeComment, onLine, reattach, unresolved } from './comments'
+import { buildContext, buildPrompt, describe, forHunk, lineTarget, makeComment, normalize, onLine, reattach, unresolved } from './comments'
 import { DEMO_DIFF } from './demo'
 import { allPatch, countHunks, filePatch, hunkLines, hunkPatch, hunkSummary, parseDiff, rowsOf } from './diff'
 import { langOf, markRange, tokenize } from './highlight'
@@ -70,7 +70,7 @@ let commentsRoot = ''
 
 const loadComments = async ($: Api, root: string) => {
   const all = ((await $.store.get(STORE_COMMENTS)) as Record<string, ReviewComment[]> | undefined) ?? {}
-  await update($, commentsAtom, () => all[root] ?? [])
+  await update($, commentsAtom, () => (all[root] ?? []).map(normalize))
   commentsRoot = root
 }
 

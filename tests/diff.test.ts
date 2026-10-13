@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { allPatch, countHunks, hunkLines, hunkPatch, hunkSummary, parseDiff, rowsOf } from '../hooks/diff'
-import { buildPrompt, forHunk, isAttached, lineTarget, makeComment, onLine, reattach, unresolved } from '../hooks/comments'
+import { buildPrompt, forHunk, isAttached, lineTarget, makeComment, normalize, onLine, reattach, unresolved } from '../hooks/comments'
 import { langOf, markRange, tokenize } from '../hooks/highlight'
 
 const MODIFIED = `diff --git a/src/a.js b/src/a.js
@@ -174,4 +174,11 @@ test('comments follow an edited hunk and build a prompt about one line', async (
 
   const removed = buildPrompt([makeComment(files[0]!, hunk, 'keep it', 2, lineTarget(hunk, 1))])
   expect(removed.includes('removed line 21')).toBe(true)
+})
+
+test('comments saved by an earlier version are filled in rather than breaking a send', async () => {
+  const old = normalize({ id: 'a', path: 'x.js', text: 'old', line: 7, snippet: 'let a', hunk: '@@ -7,1 +7,1 @@\n-let a\n+let b\n', status: 'open' } as never)
+  expect(old.lineText).toBe('let a')
+  expect(old.isOld).toBe(false)
+  expect(buildPrompt([old]).includes('x.js:7')).toBe(true)
 })
