@@ -107,3 +107,63 @@ export const allPatch = (files: readonly ReviewFile[]): string => files.map(f =>
 
 export const countHunks = (files: readonly ReviewFile[]): number =>
   files.reduce((n, f) => n + Math.max(1, f.hunks.length), 0)
+
+export type DiffLine = {
+  kind: 'add' | 'del' | 'ctx' | 'meta'
+  text: string
+  oldNo?: number
+  newNo?: number
+  /** Range of `text` that differs from its paired line (word-level highlight). */
+  mark?: readonly [number, number]
+}
+
+const HEADER = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/
+
+// Below this share of shared characters two lines are rewrites, not edits: no word highlight.
+const SIMILARITY = 0.3
+
+const pairMarks = (del: DiffLine, add: DiffLine) => {
+  const a = del.text
+  const b = add.text
+  const max = Math.min(a.length, b.length)
+  let prefix = 0
+  while (prefix < max && a[prefix] === b[prefix]) prefix++
+  let suffix = 0
+  while (suffix < max - prefix && a[a.length - 1 - suffix] === b[b.length - 1 - suffix]) suffix++
+  if (prefix + suffix < SIMILARITY * Math.max(a.length, b.length)) return
+  if (prefix === 0 && suffix === 0) return
+  if (a.length - suffix > prefix) del.mark = [prefix, a.length - suffix]
+  if (b.length - suffix > prefix) add.mark = [prefix, b.length - suffix]
+}
+
+/** A hunk as numbered display lines, with word-level marks on paired -/+ lines. */
+export const hunkLines = (hunk: ReviewHunk): DiffLine[] => {
+  const raw = splitLines(hunk.text)
+  const m = HEADER.exec(raw[0] ?? '')
+  let oldNo = m ? Number(m[1]) : 1
+  let newNo = m ? Number(m[2]) : 1
+  const lines: DiffLine[] = []
+  for (const line of raw.slice(1)) {
+    const text = line.slice(1).replace(/\t/g, '  ').replace(/\r$/, '')
+    if (line.startsWith('+')) lines.push({ kind: 'add', text, newNo: newNo++ })
+    else if (line.startsWith('-')) lines.push({ kind: 'del', text, oldNo: oldNo++ })
+    else if (line.startsWith('\\')) lines.push({ kind: 'meta', text: line.slice(1).trim() })
+    else lines.push({ kind: 'ctx', text, oldNo: oldNo++, newNo: newNo++ })
+  }
+  // Pair a run of removed lines with the added run that follows, one to one.
+  for (let i = 0; i < lines.length; ) {
+    if (lines[i]?.kind !== 'del') {
+      i++
+      continue
+    }
+    let d = i
+    while (lines[d]?.kind === 'del') d++
+    let a = d
+    while (lines[a]?.kind === 'add') a++
+    if (d - i === a - d) {
+      for (let k = 0; k < d - i; k++) pairMarks(lines[i + k]!, lines[d + k]!)
+    }
+    i = Math.max(a, i + 1)
+  }
+  return lines
+}

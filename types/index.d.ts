@@ -44,6 +44,8 @@ declare module 'claude-code' {
       notice: string
       /** Set while a destructive bulk action waits for a second press. */
       confirm: string
+      /** First visible line of the selected hunk's diff. */
+      diffOffset: number
     }
   }
 }

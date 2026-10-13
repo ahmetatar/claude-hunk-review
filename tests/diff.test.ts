@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { allPatch, countHunks, hunkPatch, parseDiff, rowsOf } from '../hooks/diff'
+import { allPatch, countHunks, hunkLines, hunkPatch, parseDiff, rowsOf } from '../hooks/diff'
 
 const MODIFIED = `diff --git a/src/a.js b/src/a.js
 index 1111111..2222222 100644
@@ -93,4 +93,26 @@ test('binary files have no hunks and are one row', async () => {
 test('rows are one per hunk across files', async () => {
   const files = parseDiff(MODIFIED + ADDED + BINARY)
   expect(rowsOf(files).length).toBe(4)
+})
+
+test('hunk lines are numbered and paired lines get a word mark', async () => {
+  const [file] = parseDiff(MODIFIED)
+  const lines = hunkLines(file!.hunks[1]!)
+  expect(lines.map(l => l.kind).join(',')).toBe('ctx,del,add,ctx')
+  expect(lines[0]?.oldNo).toBe(20)
+  expect(lines[0]?.newNo).toBe(21)
+  expect(lines[1]?.oldNo).toBe(21)
+  expect(lines[2]?.newNo).toBe(22)
+  expect(lines[1]?.mark).toBeUndefined()
+
+  const edit = parseDiff(`diff --git a/t b/t
+--- a/t
++++ b/t
+@@ -1,1 +1,1 @@
+-const total = price * 2
++const total = price * 3
+`)
+  const pair = hunkLines(edit[0]!.hunks[0]!)
+  expect(pair[0]?.mark?.join('-')).toBe('22-23')
+  expect(pair[1]?.mark?.join('-')).toBe('22-23')
 })

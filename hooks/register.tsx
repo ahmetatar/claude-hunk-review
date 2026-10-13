@@ -2,7 +2,8 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { ReviewFile, ReviewHunk, ReviewSnapshot } from '../types'
-import { allPatch, countHunks, filePatch, hunkPatch, rowsOf } from './diff'
+import { DEMO_DIFF } from './demo'
+import { allPatch, countHunks, filePatch, hunkLines, hunkPatch, parseDiff, rowsOf } from './diff'
 import {
   type Exec,
   acceptPatch,
@@ -32,6 +33,7 @@ const snapshotAtom = atom({ plugin: 'hunk-review', key: 'snapshot' } as const, E
 const selectedAtom = atom({ plugin: 'hunk-review', key: 'selected' } as const, 0)
 const noticeAtom = atom({ plugin: 'hunk-review', key: 'notice' } as const, '')
 const confirmAtom = atom({ plugin: 'hunk-review', key: 'confirm' } as const, '')
+const diffOffsetAtom = atom({ plugin: 'hunk-review', key: 'diffOffset' } as const, 0)
 
 type UndoEntry = { at: number; label: string; patch: string }
 type Verb = 'accept' | 'undo'
@@ -160,11 +162,29 @@ const act = ($: Api, verb: Verb, scope: Scope): Promise<void> =>
     await say($, `${verb === 'accept' ? 'Accepted' : 'Undone'}: ${label}`)
   })
 
-const move = ($: Api, delta: number) =>
-  Promise.all([read($, snapshotAtom), update($, confirmAtom, () => '')]).then(([snap]) => {
-    const count = rowsOf(snap.files).length
-    return update($, selectedAtom, s => Math.max(0, Math.min(count - 1, s + delta)))
-  })
+const select = ($: Api, index: number) =>
+  Promise.all([
+    update($, selectedAtom, () => index),
+    update($, diffOffsetAtom, () => 0),
+    update($, confirmAtom, () => ''),
+  ])
+
+const move = async ($: Api, delta: number) => {
+  const snap = await read($, snapshotAtom)
+  const count = rowsOf(snap.files).length
+  const now = await read($, selectedAtom)
+  await select($, Math.max(0, Math.min(count - 1, now + delta)))
+}
+
+const SCROLL_STEP = 8
+
+const scrollDiff = async ($: Api, direction: 1 | -1) => {
+  const snap = await read($, snapshotAtom)
+  const row = rowsOf(snap.files)[await read($, selectedAtom)]
+  const hunk = row ? snap.files[row.fileIndex]?.hunks[row.hunkIndex] : undefined
+  const total = hunk ? hunkLines(hunk).length : 0
+  await update($, diffOffsetAtom, o => Math.max(0, Math.min(total - 1, o + direction * SCROLL_STEP)))
+}
 
 const summary = (snap: ReviewSnapshot): string =>
   snap.error ?? (snap.files.length === 0
@@ -187,6 +207,13 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'hunks' }, async ($, e) => {
     const arg = e.args.trim()
     if (arg === 'restore') return { text: await restoreLast($) }
+    if (arg === 'demo') {
+      const files = parseDiff(DEMO_DIFF)
+      await update($, snapshotAtom, () => ({ files, baseTree: 'demo', currentTree: 'demo', takenAt: Date.now() }))
+      await update($, selectedAtom, () => 0)
+      await $.ui.open({ id: PANE, title: 'Review', focus: true, closeOnEscape: true })
+      return { text: 'Review pane opened with demo data (g refreshes from git).' }
+    }
     if (arg === 'refresh' || arg === 'status') {
       await serial(() => refresh($))
       return { text: summary(await read($, snapshotAtom)) }
@@ -234,72 +261,139 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button, Code } = $.ui.resolve(e)
+    const { Box, Text, Button } = $.ui.resolve(e)
     const snap = await read($, snapshotAtom)
     const selected = await read($, selectedAtom)
     const notice = await read($, noticeAtom)
     const confirm = await read($, confirmAtom)
+    const diffOffset = await read($, diffOffsetAtom)
     const rows = rowsOf(snap.files)
     const current = rows[selected]
     const file = current ? snap.files[current.fileIndex] : undefined
     const hunk = current && file && current.hunkIndex >= 0 ? file.hunks[current.hunkIndex] : undefined
-    const columns = e.props.bodyColumns ?? e.viewport?.columns ?? 80
+    const W = e.props.bodyColumns ?? e.viewport?.columns ?? 80
+    const R = e.props.scroll?.bodyRows ?? 30
+    const isDocked = e.props.placement === 'dock'
 
-    const first = Math.max(0, Math.min(selected - 3, rows.length - 8))
-    const window = rows.slice(first, first + 8)
+    // The list: a header per file, a row per hunk, windowed around the selection.
+    type Item = { text: string; rowIndex: number; isHeader: boolean }
+    const items: Item[] = []
+    let rowIndex = 0
+    snap.files.forEach(f => {
+      if (f.hunks.length === 0) {
+        items.push({ text: `${f.path}  (${f.kind})`, rowIndex: rowIndex++, isHeader: false })
+        return
+      }
+      const added = f.hunks.reduce((n, x) => n + x.added, 0)
+      const removed = f.hunks.reduce((n, x) => n + x.removed, 0)
+      items.push({ text: `${f.path}  +${added} -${removed}`, rowIndex: -1, isHeader: true })
+      f.hunks.forEach(x => {
+        const at = x.header.split('@@')[1]?.trim() ?? ''
+        items.push({ text: `${at}  +${x.added} -${x.removed}`, rowIndex: rowIndex++, isHeader: false })
+      })
+    })
+    const listSize = Math.max(1, Math.min(items.length, Math.floor(R * 0.3)))
+    const at = items.findIndex(it => it.rowIndex === selected)
+    const first = Math.max(0, Math.min(at - Math.floor(listSize / 2), items.length - listSize))
+    const visible = items.slice(first, first + listSize)
 
-    const bar = (
-      <Box flexWrap="wrap" columnGap={1}>
-        <Button key="next" hotkey="j" onPress={() => move($, 1)}>next</Button>
-        <Button key="prev" hotkey="k" onPress={() => move($, -1)}>prev</Button>
-        <Button key="accept" hotkey="a" variant="primary" onPress={() => act($, 'accept', 'row')}>accept</Button>
-        <Button key="undo" hotkey="u" onPress={() => act($, 'undo', 'row')}>undo</Button>
-        <Button key="accept-file" hotkey="f" onPress={() => act($, 'accept', 'file')}>accept file</Button>
-        <Button key="undo-file" hotkey="d" onPress={() => act($, 'undo', 'file')}>undo file</Button>
-        <Button key="accept-all" hotkey="y" onPress={() => act($, 'accept', 'all')}>accept all</Button>
-        <Button
-          key="undo-all"
-          hotkey="r"
-          onPress={async () => {
-            if ((await read($, confirmAtom)) === 'undo-all') return act($, 'undo', 'all')
-            await update($, confirmAtom, () => 'undo-all')
-            await say($, 'Press undo all again to revert every pending change (restore with z).')
-          }}
-        >
-          undo all
-        </Button>
-        <Button key="restore" hotkey="z" onPress={async () => say($, await restoreLast($))}>restore</Button>
-        <Button key="refresh" hotkey="g" onPress={() => serial(() => refresh($))}>refresh</Button>
-      </Box>
+    // The diff gets whatever the list, the title and the footer leave.
+    const budget = Math.max(4, R - (1 + listSize + 1 + 1 + 2 + 1))
+    const lines = hunk ? hunkLines(hunk) : []
+    const needsScroll = lines.length > budget
+    const size = needsScroll ? budget - 1 : budget
+    const offset = Math.max(0, Math.min(diffOffset, Math.max(0, lines.length - size)))
+    const shown = lines.slice(offset, offset + size)
+    const gutter = String(Math.max(...lines.map(l => Math.max(l.oldNo ?? 0, l.newNo ?? 0)), 1)).length
+
+    const num = (n: number | undefined) => (n === undefined ? ' '.repeat(gutter) : String(n).padStart(gutter))
+    const bgOf = { add: 'diffAddedDimmed', del: 'diffRemovedDimmed', ctx: undefined, meta: undefined } as const
+    const wordBg = { add: 'diffAddedWord', del: 'diffRemovedWord' } as const
+
+    const tag = (kind: 'add' | 'del' | 'ctx' | 'meta') => (kind === 'add' ? '+' : kind === 'del' ? '-' : ' ')
+
+    const hotkey = (key: string, label: string, onPress: () => unknown, color?: string) => (
+      <Button key={label} plain hotkey={key} onPress={onPress}>
+        <Text color={color}>{label}</Text>
+      </Button>
     )
 
     return (
-      <Box flexDirection="column" width={columns}>
-        <Text bold>Review  <Text dimColor>{summary(snap)}</Text></Text>
-        {bar}
-        {notice !== '' && <Text color={confirm ? 'yellow' : undefined}>{notice}</Text>}
-        {rows.length === 0 && <Text dimColor>Nothing to review. Changes Claude makes show up here.</Text>}
-        {first > 0 && <Text dimColor>  … {first} above</Text>}
-        {window.map((row, i) => {
-          const f = snap.files[row.fileIndex]
-          // Never name a local `h` here: it shadows the JSX factory.
-          const rowHunk = row.hunkIndex >= 0 ? f?.hunks[row.hunkIndex] : undefined
-          const index = first + i
-          const label = rowHunk
-            ? `${f?.path}  ${rowHunk.header.split('@@')[1]?.trim() ?? ''}  +${rowHunk.added} -${rowHunk.removed}`
-            : `${f?.path}  (${f?.kind})`
-          return (
-            <Button key={`row-${index}`} plain onPress={() => update($, selectedAtom, () => index)}>
-              <Text bold={index === selected} color={index === selected ? 'cyan' : undefined}>
-                {index === selected ? '▸ ' : '  '}
-                {label}
+      <Box flexDirection="column" width={W} height={isDocked ? R : undefined}>
+        <Text bold>
+          Review <Text dimColor>· {summary(snap)}{rows.length > 0 ? `  (hunk ${selected + 1}/${rows.length})` : ''}</Text>
+        </Text>
+
+        {visible.map(it => {
+          const isSelected = it.rowIndex === selected && !it.isHeader
+          const index = it.rowIndex
+          return it.isHeader ? (
+            <Text bold dimColor>{it.text}</Text>
+          ) : (
+            <Button key={`row-${index}`} plain onPress={() => select($, index)}>
+              <Text bold={isSelected} color={isSelected ? 'suggestion' : undefined}>
+                {isSelected ? '▸ ' : '  '}{it.text}
               </Text>
             </Button>
           )
         })}
-        {first + window.length < rows.length && <Text dimColor>  … {rows.length - first - window.length} below</Text>}
-        {hunk && <Box marginTop={1}><Code format="diff" path={file?.path} source={hunk.text} /></Box>}
-        {!hunk && file && <Box marginTop={1}><Text dimColor>{file.kind} file: accept or undo it as a whole.</Text></Box>}
+
+        {rows.length === 0 && <Text dimColor>Nothing to review. Changes Claude makes show up here.</Text>}
+
+        <Box flexDirection="column" flexGrow={1} marginTop={1}>
+          {hunk && file && (
+            <Text bold wrap="truncate-end">{file.path} <Text dimColor>{hunk.header.split('@@')[1]?.trim()}</Text></Text>
+          )}
+          {!hunk && file && <Text dimColor>{file.kind} file: accept or undo it as a whole.</Text>}
+          {shown.map(l => {
+            const mark = l.mark
+            const body =
+              mark && (l.kind === 'add' || l.kind === 'del')
+                ? [
+                    <Text>{l.text.slice(0, mark[0])}</Text>,
+                    <Text bold backgroundColor={wordBg[l.kind]}>{l.text.slice(mark[0], mark[1])}</Text>,
+                    <Text>{l.text.slice(mark[1])}</Text>,
+                  ]
+                : <Text>{l.text}</Text>
+            return (
+              <Box width={W} backgroundColor={bgOf[l.kind]}>
+                <Text wrap="truncate-end">
+                  <Text dimColor>{num(l.oldNo)} {num(l.newNo)} </Text>
+                  <Text dimColor={l.kind === 'meta'}>{tag(l.kind)} </Text>
+                  {l.kind === 'meta' ? <Text dimColor italic>{l.text}</Text> : body}
+                </Text>
+              </Box>
+            )
+          })}
+          {needsScroll && (
+            <Text dimColor>
+              {offset > 0 ? '↑ ' : '  '}lines {offset + 1}-{Math.min(lines.length, offset + size)} of {lines.length}
+              {offset + size < lines.length ? ' ↓' : ''}  (w/s scroll)
+            </Text>
+          )}
+        </Box>
+
+        <Text color={confirm ? 'warning' : 'subtle'} wrap="truncate-end">{notice === '' ? ' ' : notice}</Text>
+        <Box flexWrap="wrap" columnGap={2}>
+          {hotkey('j', 'next', () => move($, 1))}
+          {hotkey('k', 'prev', () => move($, -1))}
+          {hotkey('s', 'scroll ↓', () => scrollDiff($, 1))}
+          {hotkey('w', 'scroll ↑', () => scrollDiff($, -1))}
+          {hotkey('g', 'refresh', () => serial(() => refresh($)))}
+          {hotkey('z', 'restore', async () => say($, await restoreLast($)))}
+        </Box>
+        <Box flexWrap="wrap" columnGap={2}>
+          {hotkey('a', 'accept', () => act($, 'accept', 'row'), 'success')}
+          {hotkey('u', 'undo', () => act($, 'undo', 'row'), 'error')}
+          {hotkey('f', 'accept file', () => act($, 'accept', 'file'), 'success')}
+          {hotkey('d', 'undo file', () => act($, 'undo', 'file'), 'error')}
+          {hotkey('y', 'accept all', () => act($, 'accept', 'all'), 'success')}
+          {hotkey('r', 'undo all', async () => {
+            if ((await read($, confirmAtom)) === 'undo-all') return act($, 'undo', 'all')
+            await update($, confirmAtom, () => 'undo-all')
+            await say($, 'Press undo all (r) again to revert every pending change. z restores.')
+          }, 'error')}
+        </Box>
       </Box>
     )
   })
