@@ -384,12 +384,19 @@ export const register: Register = (on, options) => {
     return result
   })
 
-  // Esc while writing a comment leaves the comment, not the pane: the pane
-  // opens with closeOnEscape, so the first Esc is answered here.
+  // Esc while writing a comment leaves the comment, not the pane. One Esc can
+  // raise the close twice (the field gives the keys back, then the pane's own
+  // closeOnEscape fires), so the refusal outlasts the cancel by a moment.
+  let cancelledAt = 0
   on('ui.close', { id: PANE }, async ($, e, next) => {
-    if (e.origin.kind === 'person' && (await read($, composingAtom)) !== '') {
+    if (e.origin.kind !== 'person') return next(e)
+    const isWriting = (await read($, composingAtom)) !== ''
+    if (isWriting) {
       await update($, composingAtom, () => '')
-      await say($, 'Comment cancelled.')
+      await say($, 'Comment cancelled. Esc again closes the pane.')
+    }
+    if (isWriting || Date.now() - cancelledAt < 700) {
+      cancelledAt = Date.now()
       return undefined as never // answering without `next` keeps the pane open
     }
     return next(e)
