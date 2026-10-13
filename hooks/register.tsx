@@ -324,7 +324,7 @@ export const register: Register = (on, options) => {
       const files = parseDiff(DEMO_DIFF)
       await update($, snapshotAtom, () => ({ files, baseTree: 'demo', currentTree: 'demo', takenAt: Date.now() }))
       await update($, selectedAtom, () => 0)
-      await $.ui.open({ id: PANE, title: 'Review', focus: true, closeOnEscape: true })
+      await $.ui.open({ id: PANE, title: 'Review', focus: true })
       return { text: 'Review pane opened with demo data (g refreshes from git).' }
     }
     if (arg === 'send' || arg === 'fill') return { text: await sendComments($, arg === 'send' ? 'submit' : 'fill') }
@@ -342,7 +342,7 @@ export const register: Register = (on, options) => {
       await serial(() => refresh($))
       return { text: summary(await read($, snapshotAtom)) }
     }
-    await $.ui.open({ id: PANE, title: 'Review', focus: true, closeOnEscape: true })
+    await $.ui.open({ id: PANE, title: 'Review', focus: true })
     return { text: 'Review pane opened.' }
   })
 
@@ -383,24 +383,6 @@ export const register: Register = (on, options) => {
     }
     return result
   })
-
-  // Esc while writing a comment leaves the comment, not the pane. One Esc can
-  // raise the close twice (the field gives the keys back, then the pane's own
-  // closeOnEscape fires), so the refusal outlasts the cancel by a moment.
-  let cancelledAt = 0
-  on('ui.close', { id: PANE }, async ($, e, next) => {
-    if (e.origin.kind !== 'person') return next(e)
-    const isWriting = (await read($, composingAtom)) !== ''
-    if (isWriting) {
-      await update($, composingAtom, () => '')
-      await say($, 'Comment cancelled. Esc again closes the pane.')
-    }
-    if (isWriting || Date.now() - cancelledAt < 700) {
-      cancelledAt = Date.now()
-      return undefined as never // answering without `next` keeps the pane open
-    }
-    return next(e)
-  }).catch(($, e, next) => next(e))
 
   // With `injectComments` on, the person's next typed prompt carries the comments
   // they have not sent yet, as hidden context. Each is injected once.
@@ -594,7 +576,7 @@ export const register: Register = (on, options) => {
           </Box>
         </Box>
 
-        {isComposing && Input && (
+        {isComposing && e.props.isFocused && Input && (
           <Input
             key="comment"
             label="✎ "
@@ -613,6 +595,7 @@ export const register: Register = (on, options) => {
           {hotkey('w', 'scroll ↑', () => scrollDiff($, -1))}
           {hotkey('g', 'refresh', () => serial(() => refresh($)))}
           {hotkey('z', 'restore', async () => say($, await restoreLast($)))}
+          {hotkey('q', 'close', () => $.ui.close({ id: PANE }))}
         </Box>
         <Box flexWrap="wrap" columnGap={2}>
           {hotkey('a', 'accept', () => act($, 'accept', 'row'), pal.addFg)}

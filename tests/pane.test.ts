@@ -43,7 +43,7 @@ test('writing a comment shows it under the hunk and marks the list row', async (
     surface: 'terminal',
     component: 'Pane',
     requestId: 'review',
-    props: { bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 40 } },
+    props: { bodyColumns: 100, placement: 'dock', isFocused: true, scroll: { offset: 0, bodyRows: 40 } },
   })
   await ui.press({ key: 'comment' })
   expect(await ui.find({ key: 'comment' })).toBeDefined()
