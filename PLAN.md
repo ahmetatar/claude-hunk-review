@@ -99,3 +99,10 @@ Develop in this repo; load with `claude --plugin-dir ~/Desktop/Repos/claude-hunk
 1. Accept semantic: ledger-only (v1) vs. fold into baseline (more correct, more work)?
 2. Should unresolved comments be auto-injected into Claude's next turn, or only on explicit `/hunks send`?
 3. Share publicly later (marketplace file) or keep personal?
+
+## Status (2026-10-13)
+- **M0-M2 done:** baseline tree ref, per-hunk / file / all accept (folded into the baseline) and undo, `z` restores the last undo, live refresh, themed editor-style pane.
+- **M3 done:** persistent line-level comments (`n`/`p` line cursor, `c`), send (`m`, `/hunks send`) or edit-in-prompt (`e`, `/hunks fill`), optional `injectComments`, accept resolves comments, comments follow a re-edited hunk.
+- **Decisions taken:** accept folds into the baseline (not a ledger); `injectComments` is an option, default off; mod is meant to be shared (marketplace file comes with M4).
+- **Open for M4:** narrow-terminal fallback (pane needs ~110 columns), paging for very large diffs, README + `.claude-plugin/marketplace.json`, a model-callable tool to read open comments.
+- **Known quirks:** Esc hands the keyboard back instead of closing the pane (`q` closes); the engine's "panes keep their open-time settings" means reopen `/hunks` after a code change.
