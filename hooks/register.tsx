@@ -384,6 +384,17 @@ export const register: Register = (on, options) => {
     return result
   })
 
+  // Esc while writing a comment leaves the comment, not the pane: the pane
+  // opens with closeOnEscape, so the first Esc is answered here.
+  on('ui.close', { id: PANE }, async ($, e, next) => {
+    if (e.origin.kind === 'person' && (await read($, composingAtom)) !== '') {
+      await update($, composingAtom, () => '')
+      await say($, 'Comment cancelled.')
+      return undefined as never // answering without `next` keeps the pane open
+    }
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
   // With `injectComments` on, the person's next typed prompt carries the comments
   // they have not sent yet, as hidden context. Each is injected once.
   on('prompt.submit', async ($, e, next) => {
