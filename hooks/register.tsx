@@ -176,15 +176,15 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
-      name: 'review',
-      description: "Review Claude's changes hunk by hunk (/review [refresh|restore|status])",
+      name: 'hunks',
+      description: "Review Claude's changes hunk by hunk (/hunks [refresh|restore|status])",
       argumentHint: '[refresh|restore|status]',
     })
     void serial(() => refresh($))
     return next(e)
   })
 
-  on('command.run', { command: 'review' }, async ($, e) => {
+  on('command.run', { command: 'hunks' }, async ($, e) => {
     const arg = e.args.trim()
     if (arg === 'restore') return { text: await restoreLast($) }
     if (arg === 'refresh' || arg === 'status') {
@@ -227,7 +227,7 @@ export const register: Register = (on, options) => {
     const result = await next(e)
     const fresh = await serial(() => refresh($))
     if (fresh && fresh.snapshot.files.length > 0) {
-      $.ui.toast(`Review: ${countHunks(fresh.snapshot.files)} hunks pending. /review`)
+      $.ui.toast(`Review: ${countHunks(fresh.snapshot.files)} hunks pending. /hunks`)
       if (options.autoOpen === true) void $.ui.open({ id: PANE, title: 'Review' })
     }
     return result

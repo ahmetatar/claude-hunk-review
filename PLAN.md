@@ -42,8 +42,8 @@ shows up, not older uncommitted work. Catches Bash edits too.
 - **Comment**: text attached to the hunk identity, stored in `$.store`, survives turns and restarts.
 
 **Comments that persist (the thing Warp lacks).**
-- `/review send` builds one prompt from all open comments (file, line range, the hunk, the comment)
-  and submits it; `/review fill` puts it in the prompt box to edit first.
+- `/hunks send` builds one prompt from all open comments (file, line range, the hunk, the comment)
+  and submits it; `/hunks fill` puts it in the prompt box to edit first.
 - Comments stay until resolved/deleted, so they can be re-sent any number of times.
 - After Claude's next turn the hunk is re-matched by file and nearby context; if the hunk changed,
   the comment is marked "needs re-check" instead of silently dropping.
@@ -59,16 +59,16 @@ Review: 3 files, 7 hunks   [A]ccept all  [U]ndo all  [S]end comments (2)
 Keys: j/k move, a/u/c act, Enter expand, s send comments.
 
 ## Milestones
-1. **M0, spike (half day):** empty mod that opens a pane via `/review`, renders a static `Code format=diff`,
+1. **M0, spike (half day):** empty mod that opens a pane via `/hunks`, renders a static `Code format=diff`,
    one Button, and an Input. Confirms interactivity (focus, hotkeys, text entry) works in Warp.
    Kill criterion: if Input/Button focus is unusable in the pane, fall back to slash-command-driven UI.
 2. **M1, read-only review:** baseline at `turn.start`, diff parsing, file/hunk list, live refresh on
    `turn.complete`, status line count.
 3. **M2, actions:** per-hunk Undo (`git apply -R`), Accept ledger, bulk actions, conflict handling.
-4. **M3, comments:** add/edit/delete, `$.store` persistence, `/review send` and `/review fill`,
+4. **M3, comments:** add/edit/delete, `$.store` persistence, `/hunks send` and `/hunks fill`,
    re-match logic after edits.
-5. **M4, polish:** keyboard map, narrow-terminal fallback (inline list via `/review` output),
-   large-diff paging, `/review baseline reset`, tests with `claude plugin test`.
+5. **M4, polish:** keyboard map, narrow-terminal fallback (inline list via `/hunks` output),
+   large-diff paging, `/hunks baseline reset`, tests with `claude plugin test`.
 6. **M5, optional:** fold accepted hunks into baseline; PreToolUse "ask Claude to read open comments"
    hook so Claude auto-sees unresolved comments at the start of each turn.
 
@@ -97,5 +97,5 @@ Develop in this repo; load with `claude --plugin-dir ~/Desktop/Repos/claude-hunk
 
 ## Decisions needed from the owner
 1. Accept semantic: ledger-only (v1) vs. fold into baseline (more correct, more work)?
-2. Should unresolved comments be auto-injected into Claude's next turn, or only on explicit `/review send`?
+2. Should unresolved comments be auto-injected into Claude's next turn, or only on explicit `/hunks send`?
 3. Share publicly later (marketplace file) or keep personal?
