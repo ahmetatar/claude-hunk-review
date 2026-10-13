@@ -580,7 +580,7 @@ export const register: Register = (on, options) => {
           <Input
             key="comment"
             label="✎ "
-            placeholder="comment on this hunk · Enter saves · empty removes · Esc leaves"
+            placeholder="comment on this hunk · Enter saves · Enter on empty cancels"
             value={here[0]?.text ?? ''}
             submitLabel="save"
             autoFocus
