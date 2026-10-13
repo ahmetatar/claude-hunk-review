@@ -282,10 +282,11 @@ export const register: Register = (on, options) => {
         {first > 0 && <Text dimColor>  … {first} above</Text>}
         {window.map((row, i) => {
           const f = snap.files[row.fileIndex]
-          const h = row.hunkIndex >= 0 ? f?.hunks[row.hunkIndex] : undefined
+          // Never name a local `h` here: it shadows the JSX factory.
+          const rowHunk = row.hunkIndex >= 0 ? f?.hunks[row.hunkIndex] : undefined
           const index = first + i
-          const label = h
-            ? `${f?.path}  ${h.header.split('@@')[1]?.trim() ?? ''}  +${h.added} -${h.removed}`
+          const label = rowHunk
+            ? `${f?.path}  ${rowHunk.header.split('@@')[1]?.trim() ?? ''}  +${rowHunk.added} -${rowHunk.removed}`
             : `${f?.path}  (${f?.kind})`
           return (
             <Button key={`row-${index}`} plain onPress={() => update($, selectedAtom, () => index)}>
