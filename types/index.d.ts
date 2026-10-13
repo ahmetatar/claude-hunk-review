@@ -31,6 +31,23 @@ export type ReviewSnapshot = {
   error?: string
 }
 
+export type ReviewComment = {
+  id: string
+  path: string
+  /** The hunk the comment is about; follows the hunk when Claude edits it again. */
+  hunkId: string
+  /** Where the hunk was (new-side line) when the comment was written or last re-attached. */
+  line: number
+  /** First changed line of the hunk: what the comment is anchored to when ids drift. */
+  snippet: string
+  /** The hunk as written when the comment was made, so the comment survives accept/undo. */
+  hunk: string
+  text: string
+  /** open: written; sent: given to Claude, still unresolved; resolved: done. */
+  status: 'open' | 'sent' | 'resolved'
+  createdAt: number
+}
+
 /** One row of the review list: a hunk, or a file that has no hunks (binary, mode change). */
 export type ReviewRow = { fileIndex: number; hunkIndex: number }
 
@@ -46,6 +63,10 @@ declare module 'claude-code' {
       confirm: string
       /** First visible line of the selected hunk's diff. */
       diffOffset: number
+      /** The person's review comments for this repository (also kept in the store). */
+      comments: ReviewComment[]
+      /** `<path>\n<hunkId>` of the hunk whose comment is being written; empty when none. */
+      composing: string
     }
   }
 }

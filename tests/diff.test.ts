@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { allPatch, countHunks, hunkLines, hunkPatch, hunkSummary, parseDiff, rowsOf } from '../hooks/diff'
+import { buildPrompt, forHunk, isAttached, makeComment, reattach, unresolved } from '../hooks/comments'
 import { langOf, markRange, tokenize } from '../hooks/highlight'
 
 const MODIFIED = `diff --git a/src/a.js b/src/a.js
@@ -137,4 +138,29 @@ test('a hunk summary names the first changed line', async () => {
   const sum = hunkSummary(file!.hunks[0]!)
   expect(sum.snippet).toBe('two')
   expect(sum.line).toBe(2)
+})
+
+test('comments follow an edited hunk and build a prompt', async () => {
+  const files = parseDiff(MODIFIED)
+  const hunk = files[0]!.hunks[1]!
+  const c = makeComment(files[0]!, hunk, 'use const here', 1)
+  expect(isAttached(c, files)).toBe(true)
+  expect(forHunk([c], 'src/a.js', hunk.id).length).toBe(1)
+
+  // Claude rewrites the same region: the hunk id changes, the line barely moves.
+  const edited = parseDiff(MODIFIED.replace('-y\n+z', '-y\n+zz'))
+  expect(isAttached(c, edited)).toBe(false)
+  const [moved] = reattach([c], edited)
+  expect(moved?.hunkId).toBe(edited[0]!.hunks[1]!.id)
+  expect(isAttached(moved!, edited)).toBe(true)
+
+  // A hunk far away is not adopted.
+  const far = parseDiff(MODIFIED.replace('@@ -20,3 +21,3 @@', '@@ -90,3 +91,3 @@').replace('-y\n+z', '-q\n+r'))
+  expect(reattach([c], far)[0]?.hunkId).toBe(c.hunkId)
+
+  const prompt = buildPrompt([c])
+  expect(prompt.includes('src/a.js:21')).toBe(true)
+  expect(prompt.includes('> use const here')).toBe(true)
+  expect(prompt.includes('```diff')).toBe(true)
+  expect(unresolved([{ ...c, status: 'resolved' }]).length).toBe(0)
 })

@@ -27,6 +27,12 @@
         "dracula",
         "github-light"
       ]
+    },
+    "injectComments": {
+      "type": "boolean",
+      "title": "Attach unsent comments to my next prompt",
+      "description": "Your next typed prompt carries any review comments you have not sent yet, as hidden context for Claude.",
+      "default": false
     }
   },
   "author": {

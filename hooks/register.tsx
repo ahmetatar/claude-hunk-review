@@ -1,7 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { ReviewFile, ReviewHunk, ReviewSnapshot } from '../types'
+import type { ReviewComment, ReviewFile, ReviewHunk, ReviewSnapshot } from '../types'
+import { buildContext, buildPrompt, describe, forHunk, makeComment, reattach, unresolved } from './comments'
 import { DEMO_DIFF } from './demo'
 import { allPatch, countHunks, filePatch, hunkLines, hunkPatch, hunkSummary, parseDiff, rowsOf } from './diff'
 import { langOf, markRange, tokenize } from './highlight'
@@ -36,6 +37,12 @@ const selectedAtom = atom({ plugin: 'hunk-review', key: 'selected' } as const, 0
 const noticeAtom = atom({ plugin: 'hunk-review', key: 'notice' } as const, '')
 const confirmAtom = atom({ plugin: 'hunk-review', key: 'confirm' } as const, '')
 const diffOffsetAtom = atom({ plugin: 'hunk-review', key: 'diffOffset' } as const, 0)
+const commentsAtom = atom({ plugin: 'hunk-review', key: 'comments' } as const, [] as ReviewComment[])
+const composingAtom = atom({ plugin: 'hunk-review', key: 'composing' } as const, '')
+
+const STORE_COMMENTS = 'comments'
+const KEEP_RESOLVED_MS = 14 * 24 * 3600 * 1000
+const keyOf = (path: string, hunkId: string) => `${path}\n${hunkId}`
 
 type UndoEntry = { at: number; label: string; patch: string }
 type Verb = 'accept' | 'undo'
@@ -57,6 +64,30 @@ const fail = (what: string, stderr: string) =>
 
 type Fresh = { repo: Repo; snapshot: ReviewSnapshot }
 
+// Comments live in the store per repository root; the atom is what the pane draws.
+let commentsRoot = ''
+
+const loadComments = async ($: Api, root: string) => {
+  const all = ((await $.store.get(STORE_COMMENTS)) as Record<string, ReviewComment[]> | undefined) ?? {}
+  await update($, commentsAtom, () => all[root] ?? [])
+  commentsRoot = root
+}
+
+const persistComments = async ($: Api, list: ReviewComment[]) => {
+  if (commentsRoot === '') return
+  const all = ((await $.store.get(STORE_COMMENTS)) as Record<string, ReviewComment[]> | undefined) ?? {}
+  const cutoff = Date.now() - KEEP_RESOLVED_MS
+  all[commentsRoot] = list.filter(c => c.status !== 'resolved' || c.createdAt > cutoff).slice(-300)
+  await $.store.set(STORE_COMMENTS, all)
+}
+
+const setComments = async ($: Api, fn: (list: ReviewComment[]) => ReviewComment[]) => {
+  const next = fn(await read($, commentsAtom))
+  await update($, commentsAtom, () => next)
+  await persistComments($, next)
+  return next
+}
+
 /** Recomputes the review from git: baseline tree against the working copy. */
 const refresh = async ($: Api): Promise<Fresh | null> => {
   const repo = await findRepo(exec($))
@@ -73,6 +104,10 @@ const refresh = async ($: Api): Promise<Fresh | null> => {
       baseTree = currentTree
     }
     const files = await diffTrees(exec($), repo, baseTree, currentTree)
+    if (commentsRoot !== repo.root) await loadComments($, repo.root)
+    const current = await read($, commentsAtom)
+    const moved = reattach(current, files)
+    if (moved !== current) await setComments($, () => moved)
     const snapshot: ReviewSnapshot = { files, baseTree, currentTree, takenAt: Date.now() }
     await update($, snapshotAtom, () => snapshot)
     const rows = rowsOf(files).length
@@ -122,6 +157,7 @@ const locate = (fresh: ReviewSnapshot, was: Target): Target | null => {
 const act = ($: Api, verb: Verb, scope: Scope): Promise<void> =>
   serial(async () => {
     await update($, confirmAtom, () => '')
+    await update($, composingAtom, () => '')
     const was = await read($, snapshotAtom)
     const selected = await read($, selectedAtom)
     const row = rowsOf(was.files)[selected]
@@ -147,12 +183,20 @@ const act = ($: Api, verb: Verb, scope: Scope): Promise<void> =>
       : scope === 'file' ? (found.file as ReviewFile).path
       : `${(found.file as ReviewFile).path} ${found.hunk?.header.split('@@')[1]?.trim() ?? ''}`.trim()
 
+    let resolved = 0
     if (verb === 'accept') {
       if (scope === 'all') await writeBase(exec($), repo, snapshot.currentTree as string)
       else {
         const r = await acceptPatch(exec($), repo, base, patch)
         if (!r.ok) return void (await say($, fail('Accept', r.stderr)))
       }
+      // Accepting is the answer to a comment on what was accepted.
+      const accepted = (c: ReviewComment) =>
+        scope === 'all' ||
+        (c.path === found.file?.path && (scope === 'file' || (scope === 'row' && c.hunkId === found.hunk?.id)))
+      await setComments($, list =>
+        list.map(c => (c.status !== 'resolved' && accepted(c) ? (resolved++, { ...c, status: 'resolved' as const }) : c)),
+      )
     } else {
       const r = await undoPatch(exec($), repo, patch)
       if (!r.ok) {
@@ -161,7 +205,7 @@ const act = ($: Api, verb: Verb, scope: Scope): Promise<void> =>
       await logUndo($, label, patch)
     }
     await refresh($)
-    await say($, `${verb === 'accept' ? 'Accepted' : 'Undone'}: ${label}`)
+    await say($, `${verb === 'accept' ? 'Accepted' : 'Undone'}: ${label}${resolved > 0 ? ` (${resolved} comment${resolved === 1 ? '' : 's'} resolved)` : ''}`)
   })
 
 const select = ($: Api, index: number) =>
@@ -169,6 +213,7 @@ const select = ($: Api, index: number) =>
     update($, selectedAtom, () => index),
     update($, diffOffsetAtom, () => 0),
     update($, confirmAtom, () => ''),
+    update($, composingAtom, () => ''),
   ])
 
 const move = async ($: Api, delta: number) => {
@@ -188,6 +233,72 @@ const scrollDiff = async ($: Api, direction: 1 | -1) => {
   await update($, diffOffsetAtom, o => Math.max(0, Math.min(total - 1, o + direction * SCROLL_STEP)))
 }
 
+type Chosen = { file: ReviewFile; hunk: ReviewHunk } | null
+
+const selectedHunk = async ($: Api): Promise<Chosen> => {
+  const snap = await read($, snapshotAtom)
+  const row = rowsOf(snap.files)[await read($, selectedAtom)]
+  const file = row ? snap.files[row.fileIndex] : undefined
+  const hunk = row && file && row.hunkIndex >= 0 ? file.hunks[row.hunkIndex] : undefined
+  return file && hunk ? { file, hunk } : null
+}
+
+const startComment = async ($: Api) => {
+  const picked = await selectedHunk($)
+  if (!picked) return say($, 'Select a hunk to comment on.')
+  const key = keyOf(picked.file.path, picked.hunk.id)
+  await update($, composingAtom, now => (now === key ? '' : key))
+  await say($, '')
+}
+
+/** Saves what was typed: a new comment, a rewrite of the hunk's own, or (empty) its removal. */
+const saveComment = ($: Api, text: string) =>
+  serial(async () => {
+    const picked = await selectedHunk($)
+    await update($, composingAtom, () => '')
+    if (!picked) return
+    const body = text.trim()
+    const { file, hunk } = picked
+    const existing = forHunk(await read($, commentsAtom), file.path, hunk.id)[0]
+    if (body === '') {
+      if (!existing) return
+      await setComments($, list => list.filter(c => c.id !== existing.id))
+      return say($, 'Comment removed.')
+    }
+    if (existing) {
+      await setComments($, list => list.map(c => (c.id === existing.id ? { ...c, text: body, status: 'open' as const } : c)))
+      return say($, 'Comment updated.')
+    }
+    await setComments($, list => [...list, makeComment(file, hunk, body, Date.now())])
+    await say($, 'Comment saved. m sends it to Claude, e puts it in the prompt box.')
+  })
+
+const resolveSelected = ($: Api) =>
+  serial(async () => {
+    const picked = await selectedHunk($)
+    if (!picked) return say($, 'Select a hunk first.')
+    const here = forHunk(await read($, commentsAtom), picked.file.path, picked.hunk.id)
+    if (here.length === 0) return say($, 'No open comment on this hunk.')
+    await setComments($, list => list.map(c => (here.some(h => h.id === c.id) ? { ...c, status: 'resolved' as const } : c)))
+    await say($, `Resolved ${here.length} comment${here.length === 1 ? '' : 's'}.`)
+  })
+
+/** Sends every unresolved comment to Claude as one prompt, or leaves it in the prompt box to edit. */
+const sendComments = ($: Api, mode: 'submit' | 'fill'): Promise<string> =>
+  serial(async () => {
+    const list = unresolved(await read($, commentsAtom))
+    if (list.length === 0) return 'No open comments. Press c on a hunk to write one.'
+    const text = buildPrompt(list)
+    const count = `${list.length} comment${list.length === 1 ? '' : 's'}`
+    if (mode === 'fill') {
+      const r = await $.prompt.fill({ text, mode: 'replace' })
+      return r.isFilled ? `Put ${count} in the prompt box. Edit it, then press Enter.` : 'The prompt box could not take the text.'
+    }
+    await setComments($, all => all.map(c => (c.status === 'open' ? { ...c, status: 'sent' as const } : c)))
+    $.prompt.submit({ text, asUser: true }).catch(() => undefined)
+    return `Sent ${count} to Claude.`
+  })
+
 const summary = (snap: ReviewSnapshot): string =>
   snap.error ?? (snap.files.length === 0
     ? 'No pending changes.'
@@ -199,8 +310,8 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'hunks',
-      description: "Review Claude's changes hunk by hunk (/hunks [refresh|restore|status])",
-      argumentHint: '[refresh|restore|status]',
+      description: "Review Claude's changes hunk by hunk (/hunks [send|fill|comments|clear|refresh|restore|status])",
+      argumentHint: '[send|fill|comments|clear|refresh|restore|status]',
     })
     void serial(() => refresh($))
     return next(e)
@@ -215,6 +326,17 @@ export const register: Register = (on, options) => {
       await update($, selectedAtom, () => 0)
       await $.ui.open({ id: PANE, title: 'Review', focus: true, closeOnEscape: true })
       return { text: 'Review pane opened with demo data (g refreshes from git).' }
+    }
+    if (arg === 'send' || arg === 'fill') return { text: await sendComments($, arg === 'send' ? 'submit' : 'fill') }
+    if (arg === 'comments') {
+      const list = unresolved(await read($, commentsAtom))
+      const files = (await read($, snapshotAtom)).files
+      return { text: list.length === 0 ? 'No open comments.' : list.map((c, i) => `${i + 1}. ${describe(c, files)}`).join('\n') }
+    }
+    if (arg === 'clear') {
+      const before = (await read($, commentsAtom)).length
+      const after = (await setComments($, list => unresolved(list))).length
+      return { text: `Removed ${before - after} resolved comment${before - after === 1 ? '' : 's'}.` }
     }
     if (arg === 'refresh' || arg === 'status') {
       await serial(() => refresh($))
@@ -262,14 +384,29 @@ export const register: Register = (on, options) => {
     return result
   })
 
+  // With `injectComments` on, the person's next typed prompt carries the comments
+  // they have not sent yet, as hidden context. Each is injected once.
+  on('prompt.submit', async ($, e, next) => {
+    if (options.injectComments !== true || e.origin.kind !== 'composer') return next(e)
+    const fresh = (await read($, commentsAtom)).filter(c => c.status === 'open')
+    if (fresh.length === 0) return next(e)
+    const result = await next({ ...e, context: [...(e.context ?? []), buildContext(fresh)] })
+    await setComments($, list => list.map(c => (fresh.some(f => f.id === c.id) ? { ...c, status: 'sent' as const } : c)))
+    return result
+  }).catch(($, e, next) => next(e))
+
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button } = $.ui.resolve(e)
+    const ui = $.ui.resolve(e)
+    const { Box, Text, Button } = ui
+    const Input = 'Input' in ui ? ui.Input : undefined
     const pal = paletteFor(options.theme)
     const snap = await read($, snapshotAtom)
     const selected = await read($, selectedAtom)
     const notice = await read($, noticeAtom)
     const confirm = await read($, confirmAtom)
     const diffOffset = await read($, diffOffsetAtom)
+    const allComments = await read($, commentsAtom)
+    const composing = await read($, composingAtom)
     const rows = rowsOf(snap.files)
     const current = rows[selected]
     const file = current ? snap.files[current.fileIndex] : undefined
@@ -278,6 +415,10 @@ export const register: Register = (on, options) => {
     const R = e.props.scroll?.bodyRows ?? 30
     const isDocked = e.props.placement === 'dock'
     const IW = W - 2
+    const here = file && hunk ? forHunk(allComments, file.path, hunk.id) : []
+    const isComposing = file !== undefined && hunk !== undefined && composing === keyOf(file.path, hunk.id)
+    const openComments = unresolved(allComments)
+    const commentRows = here.reduce((n, c) => n + Math.ceil((c.text.length + 10) / Math.max(10, IW)), 0)
 
     const split = (path: string) => {
       const at = path.lastIndexOf('/')
@@ -309,7 +450,7 @@ export const register: Register = (on, options) => {
     const first = Math.max(0, Math.min(at - Math.floor(listSize / 2), items.length - listSize))
     const visible = items.slice(first, first + listSize)
 
-    const budget = Math.max(4, R - (1 + listSize + 1 + 2 + 1 + 2))
+    const budget = Math.max(4, R - (1 + listSize + 1 + 2 + 1 + 3 + (isComposing ? 1 : 0) + commentRows))
     const lines = hunk ? hunkLines(hunk) : []
     const needsScroll = lines.length > budget
     const size = needsScroll ? budget - 1 : budget
@@ -333,7 +474,7 @@ export const register: Register = (on, options) => {
       <Box flexDirection="column" width={W} height={isDocked ? R : undefined}>
         <Text>
           <Text bold color={pal.accent}>Review</Text>
-          <Text dimColor>  {summary(snap)}{rows.length > 0 ? `  ·  ${selected + 1}/${rows.length}` : ''}</Text>
+          <Text dimColor>  {summary(snap)}{rows.length > 0 ? `  ·  ${selected + 1}/${rows.length}` : ''}{openComments.length > 0 ? `  ·  ✎ ${openComments.length}` : ''}</Text>
         </Text>
 
         {visible.map(it => {
@@ -354,7 +495,8 @@ export const register: Register = (on, options) => {
           const index = it.rowIndex
           const x = it.hunkIndex >= 0 ? f.hunks[it.hunkIndex] : undefined
           const sum = x ? hunkSummary(x) : undefined
-          const tail = x ? badge(x.added, x.removed) : f.kind
+          const noted = x ? forHunk(allComments, f.path, x.id).length : 0
+          const tail = (x ? badge(x.added, x.removed) : f.kind) + (noted > 0 ? ' ✎' : '')
           const room = Math.max(6, W - 4 - 7 - tail.length - 2)
           const snippet = (sum?.snippet || (x ? '(whitespace)' : f.path)).slice(0, room)
           return (
@@ -366,6 +508,7 @@ export const register: Register = (on, options) => {
                   <Text color={pal.dim}>{(sum ? `L${sum.line}` : '').padEnd(6)}</Text>
                   <Text bold={isSelected}>{snippet.padEnd(room)}</Text>
                   {x ? counts(x.added, x.removed) : <Text dimColor>{f.kind}</Text>}
+                  {noted > 0 && <Text color={pal.accent}> ✎</Text>}
                 </Text>
               </Button>
             </Box>
@@ -415,6 +558,15 @@ export const register: Register = (on, options) => {
                 </Box>
               )
             })}
+            {here.map(c => (
+              <Box width={IW} backgroundColor={pal.bar}>
+                <Text wrap="wrap">
+                  <Text color={pal.accent}>▎ ✎ </Text>
+                  <Text color={pal.text}>{c.text}</Text>
+                  {c.status === 'sent' && <Text color={pal.dim}>  sent</Text>}
+                </Text>
+              </Box>
+            ))}
             {needsScroll && (
               <Text color={pal.dim}>
                 {offset > 0 ? ' ↑' : '  '} lines {offset + 1}–{Math.min(lines.length, offset + size)} of {lines.length}
@@ -424,6 +576,17 @@ export const register: Register = (on, options) => {
           </Box>
         </Box>
 
+        {isComposing && Input && (
+          <Input
+            key="comment"
+            label="✎ "
+            placeholder="comment on this hunk · Enter saves · empty removes · Esc leaves"
+            value={here[0]?.text ?? ''}
+            submitLabel="save"
+            autoFocus
+            onSubmit={(text: string) => void saveComment($, text)}
+          />
+        )}
         <Text color={confirm ? 'warning' : 'subtle'} wrap="truncate-end">{notice === '' ? ' ' : notice}</Text>
         <Box flexWrap="wrap" columnGap={2}>
           {hotkey('j', 'next', () => move($, 1))}
@@ -444,6 +607,12 @@ export const register: Register = (on, options) => {
             await update($, confirmAtom, () => 'undo-all')
             await say($, 'Press undo all (r) again to revert every pending change. z restores.')
           }, pal.delFg)}
+        </Box>
+        <Box flexWrap="wrap" columnGap={2}>
+          {hotkey('c', here.length > 0 ? 'edit comment' : 'comment', () => startComment($), pal.accent)}
+          {hotkey('x', 'resolve', () => resolveSelected($), pal.accent)}
+          {hotkey('m', `send to Claude${openComments.length > 0 ? ` (${openComments.length})` : ''}`, async () => say($, await sendComments($, 'submit')), pal.accent)}
+          {hotkey('e', 'edit in prompt', async () => say($, await sendComments($, 'fill')), pal.accent)}
         </Box>
       </Box>
     )

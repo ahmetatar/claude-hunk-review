@@ -34,3 +34,22 @@ test('a pane with pending hunks draws its list, diff and footer', async ($, on) 
     await ui.unmount()
   }
 })
+
+test('writing a comment shows it under the hunk and marks the list row', async ($, on) => {
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  await $.command.run({ command: 'hunks', args: 'demo' })
+  const ui = await $.ui.mount({
+    plugin: 'hunk-review',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'review',
+    props: { bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 40 } },
+  })
+  await ui.press({ key: 'comment' })
+  expect(await ui.find({ key: 'comment' })).toBeDefined()
+  await ui.input({ key: 'comment', text: 'log the request id too' })
+  expect(await ui.find({ type: 'Text', text: /log the request id too/ })).toBeDefined()
+  expect(await ui.find({ key: 'edit comment' })).toBeDefined()
+  expect(await ui.find({ key: 'send to Claude (1)' })).toBeDefined()
+  await ui.unmount()
+})
