@@ -1,0 +1,23 @@
+{
+  "name": "hunk-review",
+  "version": "0.1.0",
+  "description": "Per-hunk review of Claude's changes in a terminal pane: accept, undo and comment on hunks, with comments that persist and can be re-sent.",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "autoOpen": {
+      "type": "boolean",
+      "title": "Open the review pane when a turn leaves changes",
+      "description": "Opens the pane after Claude finishes a turn that changed files (needs a wide terminal).",
+      "default": false
+    },
+    "liveRefresh": {
+      "type": "boolean",
+      "title": "Refresh the review after each file-changing tool call",
+      "description": "Keeps the pane live while Claude works. Turn off in very large repositories.",
+      "default": true
+    }
+  },
+  "author": {
+    "name": "Ahmet Atar"
+  }
+}
