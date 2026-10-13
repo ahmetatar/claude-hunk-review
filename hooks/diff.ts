@@ -167,3 +167,15 @@ export const hunkLines = (hunk: ReviewHunk): DiffLine[] => {
   }
   return lines
 }
+
+/** What a hunk list row shows: where the hunk starts and the first line it changes. */
+export const hunkSummary = (hunk: ReviewHunk): { line: number; snippet: string } => {
+  const lines = hunkLines(hunk)
+  const first =
+    lines.find(l => (l.kind === 'add' || l.kind === 'del') && l.text.trim() !== '') ??
+    lines.find(l => l.kind !== 'meta' && l.text.trim() !== '')
+  const m = HEADER.exec(hunk.header)
+  const line = Number(m?.[2] ?? m?.[1] ?? 1)
+  const at = first?.newNo ?? first?.oldNo ?? line
+  return { line: at, snippet: first?.text.trim() ?? '' }
+}

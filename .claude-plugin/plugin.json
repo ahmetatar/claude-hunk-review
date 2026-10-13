@@ -15,6 +15,18 @@
       "title": "Refresh the review after each file-changing tool call",
       "description": "Keeps the pane live while Claude works. Turn off in very large repositories.",
       "default": true
+    },
+    "theme": {
+      "type": "string",
+      "title": "Color theme",
+      "description": "Colors of the review pane's code view.",
+      "default": "tokyo-night",
+      "options": [
+        "tokyo-night",
+        "catppuccin",
+        "dracula",
+        "github-light"
+      ]
     }
   },
   "author": {

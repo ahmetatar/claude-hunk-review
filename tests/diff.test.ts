@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
-import { allPatch, countHunks, hunkLines, hunkPatch, parseDiff, rowsOf } from '../hooks/diff'
+import { allPatch, countHunks, hunkLines, hunkPatch, hunkSummary, parseDiff, rowsOf } from '../hooks/diff'
+import { langOf, markRange, tokenize } from '../hooks/highlight'
 
 const MODIFIED = `diff --git a/src/a.js b/src/a.js
 index 1111111..2222222 100644
@@ -115,4 +116,25 @@ test('hunk lines are numbered and paired lines get a word mark', async () => {
   const pair = hunkLines(edit[0]!.hunks[0]!)
   expect(pair[0]?.mark?.join('-')).toBe('22-23')
   expect(pair[1]?.mark?.join('-')).toBe('22-23')
+})
+
+test('the highlighter classifies tokens and marks a range', async () => {
+  const toks = tokenize("const x = foo(1, 'a') // hi", 'clike')
+  const kinds = Object.fromEntries(toks.map(t => [t.text.trim(), t.kind]))
+  expect(kinds['const']).toBe('keyword')
+  expect(kinds['foo']).toBe('func')
+  expect(kinds["'a'"]).toBe('string')
+  expect(kinds['1']).toBe('number')
+  expect(kinds['// hi']).toBe('comment')
+  expect(langOf('src/a.tsx')).toBe('clike')
+  expect(langOf('x.py')).toBe('hash')
+  const marked = markRange(tokenize('abc def', 'plain'), [2, 5])
+  expect(marked.map(t => `${t.text}:${t.isMarked}`).join('|')).toBe('ab:false|c d:true|ef:false')
+})
+
+test('a hunk summary names the first changed line', async () => {
+  const [file] = parseDiff(MODIFIED)
+  const sum = hunkSummary(file!.hunks[0]!)
+  expect(sum.snippet).toBe('two')
+  expect(sum.line).toBe(2)
 })

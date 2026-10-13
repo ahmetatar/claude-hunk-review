@@ -3,7 +3,9 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { ReviewFile, ReviewHunk, ReviewSnapshot } from '../types'
 import { DEMO_DIFF } from './demo'
-import { allPatch, countHunks, filePatch, hunkLines, hunkPatch, parseDiff, rowsOf } from './diff'
+import { allPatch, countHunks, filePatch, hunkLines, hunkPatch, hunkSummary, parseDiff, rowsOf } from './diff'
+import { langOf, markRange, tokenize } from './highlight'
+import { paletteFor } from './theme'
 import {
   type Exec,
   acceptPatch,
@@ -262,6 +264,7 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
+    const pal = paletteFor(options.theme)
     const snap = await read($, snapshotAtom)
     const selected = await read($, selectedAtom)
     const notice = await read($, noticeAtom)
@@ -274,43 +277,47 @@ export const register: Register = (on, options) => {
     const W = e.props.bodyColumns ?? e.viewport?.columns ?? 80
     const R = e.props.scroll?.bodyRows ?? 30
     const isDocked = e.props.placement === 'dock'
+    const IW = W - 2
+
+    const split = (path: string) => {
+      const at = path.lastIndexOf('/')
+      return at === -1 ? { dir: '', name: path } : { dir: path.slice(0, at + 1), name: path.slice(at + 1) }
+    }
+    const badge = (added: number, removed: number) => [
+      added > 0 ? `+${added}` : '',
+      removed > 0 ? `−${removed}` : '',
+    ].filter(Boolean).join(' ')
+    const counts = (added: number, removed: number) => (
+      <Text>
+        {added > 0 && <Text color={pal.addFg}>+{added}</Text>}
+        {added > 0 && removed > 0 && ' '}
+        {removed > 0 && <Text color={pal.delFg}>{'−'}{removed}</Text>}
+      </Text>
+    )
 
     // The list: a header per file, a row per hunk, windowed around the selection.
-    type Item = { text: string; rowIndex: number; isHeader: boolean }
+    type Item = { rowIndex: number; fileIndex: number; hunkIndex: number }
     const items: Item[] = []
     let rowIndex = 0
-    snap.files.forEach(f => {
-      if (f.hunks.length === 0) {
-        items.push({ text: `${f.path}  (${f.kind})`, rowIndex: rowIndex++, isHeader: false })
-        return
-      }
-      const added = f.hunks.reduce((n, x) => n + x.added, 0)
-      const removed = f.hunks.reduce((n, x) => n + x.removed, 0)
-      items.push({ text: `${f.path}  +${added} -${removed}`, rowIndex: -1, isHeader: true })
-      f.hunks.forEach(x => {
-        const at = x.header.split('@@')[1]?.trim() ?? ''
-        items.push({ text: `${at}  +${x.added} -${x.removed}`, rowIndex: rowIndex++, isHeader: false })
-      })
+    snap.files.forEach((f, fileIndex) => {
+      if (f.hunks.length === 0) return void items.push({ rowIndex: rowIndex++, fileIndex, hunkIndex: -1 })
+      items.push({ rowIndex: -1, fileIndex, hunkIndex: -1 })
+      f.hunks.forEach((_, hunkIndex) => items.push({ rowIndex: rowIndex++, fileIndex, hunkIndex }))
     })
-    const listSize = Math.max(1, Math.min(items.length, Math.floor(R * 0.3)))
+    const listSize = Math.max(1, Math.min(items.length, Math.floor(R * 0.32)))
     const at = items.findIndex(it => it.rowIndex === selected)
     const first = Math.max(0, Math.min(at - Math.floor(listSize / 2), items.length - listSize))
     const visible = items.slice(first, first + listSize)
 
-    // The diff gets whatever the list, the title and the footer leave.
-    const budget = Math.max(4, R - (1 + listSize + 1 + 1 + 2 + 1))
+    const budget = Math.max(4, R - (1 + listSize + 1 + 2 + 1 + 2))
     const lines = hunk ? hunkLines(hunk) : []
     const needsScroll = lines.length > budget
     const size = needsScroll ? budget - 1 : budget
     const offset = Math.max(0, Math.min(diffOffset, Math.max(0, lines.length - size)))
     const shown = lines.slice(offset, offset + size)
-    const gutter = String(Math.max(...lines.map(l => Math.max(l.oldNo ?? 0, l.newNo ?? 0)), 1)).length
-
-    const num = (n: number | undefined) => (n === undefined ? ' '.repeat(gutter) : String(n).padStart(gutter))
-    const bgOf = { add: 'diffAddedDimmed', del: 'diffRemovedDimmed', ctx: undefined, meta: undefined } as const
-    const wordBg = { add: 'diffAddedWord', del: 'diffRemovedWord' } as const
-
-    const tag = (kind: 'add' | 'del' | 'ctx' | 'meta') => (kind === 'add' ? '+' : kind === 'del' ? '-' : ' ')
+    const digits = String(Math.max(...lines.map(l => Math.max(l.oldNo ?? 0, l.newNo ?? 0)), 1)).length
+    const num = (n: number | undefined) => (n === undefined ? ' '.repeat(digits) : String(n).padStart(digits))
+    const lang = file ? langOf(file.path) : 'plain'
 
     const hotkey = (key: string, label: string, onPress: () => unknown, color?: string) => (
       <Button key={label} plain hotkey={key} onPress={onPress}>
@@ -318,59 +325,103 @@ export const register: Register = (on, options) => {
       </Button>
     )
 
+    const { dir, name } = split(file?.path ?? '')
+    const fileAdded = file ? file.hunks.reduce((n, x) => n + x.added, 0) : 0
+    const fileRemoved = file ? file.hunks.reduce((n, x) => n + x.removed, 0) : 0
+
     return (
       <Box flexDirection="column" width={W} height={isDocked ? R : undefined}>
-        <Text bold>
-          Review <Text dimColor>· {summary(snap)}{rows.length > 0 ? `  (hunk ${selected + 1}/${rows.length})` : ''}</Text>
+        <Text>
+          <Text bold color={pal.accent}>Review</Text>
+          <Text dimColor>  {summary(snap)}{rows.length > 0 ? `  ·  ${selected + 1}/${rows.length}` : ''}</Text>
         </Text>
 
         {visible.map(it => {
-          const isSelected = it.rowIndex === selected && !it.isHeader
-          const index = it.rowIndex
-          return it.isHeader ? (
-            <Text bold dimColor>{it.text}</Text>
-          ) : (
-            <Button key={`row-${index}`} plain onPress={() => select($, index)}>
-              <Text bold={isSelected} color={isSelected ? 'suggestion' : undefined}>
-                {isSelected ? '▸ ' : '  '}{it.text}
+          const f = snap.files[it.fileIndex]
+          if (!f) return null
+          if (it.rowIndex === -1) {
+            const { dir: d, name: n } = split(f.path)
+            return (
+              <Text wrap="truncate-end">
+                <Text color={pal.accent}>{'▾ '}</Text>
+                <Text bold>{n}</Text>
+                <Text dimColor> {d}  </Text>
+                {counts(f.hunks.reduce((a, x) => a + x.added, 0), f.hunks.reduce((a, x) => a + x.removed, 0))}
               </Text>
-            </Button>
+            )
+          }
+          const isSelected = it.rowIndex === selected
+          const index = it.rowIndex
+          const x = it.hunkIndex >= 0 ? f.hunks[it.hunkIndex] : undefined
+          const sum = x ? hunkSummary(x) : undefined
+          const tail = x ? badge(x.added, x.removed) : f.kind
+          const room = Math.max(6, W - 4 - 7 - tail.length - 2)
+          const snippet = (sum?.snippet || (x ? '(whitespace)' : f.path)).slice(0, room)
+          return (
+            <Box width={W} backgroundColor={isSelected ? pal.selected : undefined}>
+              <Button key={`row-${index}`} plain onPress={() => select($, index)}>
+                <Text wrap="truncate-end">
+                  <Text color={pal.accent}>{isSelected ? '▎' : ' '}</Text>
+                  <Text color={pal.accent}>{isSelected ? '● ' : '○ '}</Text>
+                  <Text color={pal.dim}>{(sum ? `L${sum.line}` : '').padEnd(6)}</Text>
+                  <Text bold={isSelected}>{snippet.padEnd(room)}</Text>
+                  {x ? counts(x.added, x.removed) : <Text dimColor>{f.kind}</Text>}
+                </Text>
+              </Button>
+            </Box>
           )
         })}
-
         {rows.length === 0 && <Text dimColor>Nothing to review. Changes Claude makes show up here.</Text>}
 
-        <Box flexDirection="column" flexGrow={1} marginTop={1}>
-          {hunk && file && (
-            <Text bold wrap="truncate-end">{file.path} <Text dimColor>{hunk.header.split('@@')[1]?.trim()}</Text></Text>
-          )}
-          {!hunk && file && <Text dimColor>{file.kind} file: accept or undo it as a whole.</Text>}
-          {shown.map(l => {
-            const mark = l.mark
-            const body =
-              mark && (l.kind === 'add' || l.kind === 'del')
-                ? [
-                    <Text>{l.text.slice(0, mark[0])}</Text>,
-                    <Text bold backgroundColor={wordBg[l.kind]}>{l.text.slice(mark[0], mark[1])}</Text>,
-                    <Text>{l.text.slice(mark[1])}</Text>,
-                  ]
-                : <Text>{l.text}</Text>
-            return (
-              <Box width={W} backgroundColor={bgOf[l.kind]}>
-                <Text wrap="truncate-end">
-                  <Text dimColor>{num(l.oldNo)} {num(l.newNo)} </Text>
-                  <Text dimColor={l.kind === 'meta'}>{tag(l.kind)} </Text>
-                  {l.kind === 'meta' ? <Text dimColor italic>{l.text}</Text> : body}
-                </Text>
-              </Box>
-            )
-          })}
-          {needsScroll && (
-            <Text dimColor>
-              {offset > 0 ? '↑ ' : '  '}lines {offset + 1}-{Math.min(lines.length, offset + size)} of {lines.length}
-              {offset + size < lines.length ? ' ↓' : ''}  (w/s scroll)
+        <Box flexDirection="column" flexGrow={1} borderStyle="round" borderColor={pal.border} marginTop={0}>
+          <Box width={IW} backgroundColor={pal.bar} justifyContent="space-between">
+            <Text wrap="truncate-end">
+              <Text color={pal.accent} bold> {'◆'} </Text>
+              <Text bold color={pal.text}>{name || 'no file'}</Text>
+              <Text color={pal.dim}> {dir}</Text>
             </Text>
-          )}
+            <Text wrap="truncate-end">
+              {hunk ? <Text color={pal.dim}>{hunk.header.split('@@')[1]?.trim()}  </Text> : null}
+              {counts(fileAdded, fileRemoved)}
+              <Text> </Text>
+            </Text>
+          </Box>
+          <Box flexDirection="column" flexGrow={1} width={IW} backgroundColor={pal.bg}>
+            {!hunk && file && <Text color={pal.dim}>  {file.kind} file: accept or undo it as a whole.</Text>}
+            {shown.map(l => {
+              const isChanged = l.kind === 'add' || l.kind === 'del'
+              const bg = l.kind === 'add' ? pal.addBg : l.kind === 'del' ? pal.delBg : undefined
+              const wordBg = l.kind === 'add' ? pal.addWord : pal.delWord
+              const edge = l.kind === 'add' ? pal.addFg : pal.delFg
+              const tokens = l.kind === 'meta' ? [] : markRange(tokenize(l.text, lang), isChanged ? l.mark : undefined)
+              return (
+                <Box width={IW} backgroundColor={bg}>
+                  <Text wrap="truncate-end">
+                    <Text color={edge}>{isChanged ? '▎' : ' '}</Text>
+                    <Text color={pal.gutter}>{num(l.oldNo)} {num(l.newNo)} </Text>
+                    <Text bold color={edge}>{l.kind === 'add' ? '+' : l.kind === 'del' ? '−' : ' '} </Text>
+                    {l.kind === 'meta' && <Text italic color={pal.dim}>{l.text}</Text>}
+                    {tokens.map(t => (
+                      <Text
+                        color={pal[t.kind]}
+                        italic={t.kind === 'comment'}
+                        bold={t.isMarked}
+                        backgroundColor={t.isMarked ? wordBg : undefined}
+                      >
+                        {t.text}
+                      </Text>
+                    ))}
+                  </Text>
+                </Box>
+              )
+            })}
+            {needsScroll && (
+              <Text color={pal.dim}>
+                {offset > 0 ? ' ↑' : '  '} lines {offset + 1}–{Math.min(lines.length, offset + size)} of {lines.length}
+                {offset + size < lines.length ? ' ↓' : ''}   w/s to scroll
+              </Text>
+            )}
+          </Box>
         </Box>
 
         <Text color={confirm ? 'warning' : 'subtle'} wrap="truncate-end">{notice === '' ? ' ' : notice}</Text>
@@ -383,16 +434,16 @@ export const register: Register = (on, options) => {
           {hotkey('z', 'restore', async () => say($, await restoreLast($)))}
         </Box>
         <Box flexWrap="wrap" columnGap={2}>
-          {hotkey('a', 'accept', () => act($, 'accept', 'row'), 'success')}
-          {hotkey('u', 'undo', () => act($, 'undo', 'row'), 'error')}
-          {hotkey('f', 'accept file', () => act($, 'accept', 'file'), 'success')}
-          {hotkey('d', 'undo file', () => act($, 'undo', 'file'), 'error')}
-          {hotkey('y', 'accept all', () => act($, 'accept', 'all'), 'success')}
+          {hotkey('a', 'accept', () => act($, 'accept', 'row'), pal.addFg)}
+          {hotkey('u', 'undo', () => act($, 'undo', 'row'), pal.delFg)}
+          {hotkey('f', 'accept file', () => act($, 'accept', 'file'), pal.addFg)}
+          {hotkey('d', 'undo file', () => act($, 'undo', 'file'), pal.delFg)}
+          {hotkey('y', 'accept all', () => act($, 'accept', 'all'), pal.addFg)}
           {hotkey('r', 'undo all', async () => {
             if ((await read($, confirmAtom)) === 'undo-all') return act($, 'undo', 'all')
             await update($, confirmAtom, () => 'undo-all')
             await say($, 'Press undo all (r) again to revert every pending change. z restores.')
-          }, 'error')}
+          }, pal.delFg)}
         </Box>
       </Box>
     )
