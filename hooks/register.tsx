@@ -585,7 +585,7 @@ export const register: Register = (on, options) => {
 
     const hotkey = (key: string, label: string, onPress: () => unknown, color?: string) => (
       <Button key={label} plain hotkey={key} onPress={onPress}>
-        <Text color={color}>{label}</Text>
+        <Text color={color ?? pal.text}>{label}</Text>
       </Button>
     )
 
@@ -594,10 +594,10 @@ export const register: Register = (on, options) => {
     const fileRemoved = file ? file.hunks.reduce((n, x) => n + x.removed, 0) : 0
 
     return (
-      <Box flexDirection="column" width={W} height={isDocked ? R : undefined}>
+      <Box flexDirection="column" width={W} height={isDocked ? R : undefined} backgroundColor={pal.bg}>
         <Text>
           <Text bold color={pal.accent}>Review</Text>
-          <Text dimColor>  {summary(snap)}{rows.length > 0 ? `  ·  ${selected + 1}/${rows.length}` : ''}{openComments.length > 0 ? `  ·  ✎ ${openComments.length}` : ''}</Text>
+          <Text color={pal.muted}>  {summary(snap)}{rows.length > 0 ? `  ·  ${selected + 1}/${rows.length}` : ''}{openComments.length > 0 ? `  ·  ✎ ${openComments.length}` : ''}</Text>
         </Text>
 
         {visible.map(it => {
@@ -608,8 +608,8 @@ export const register: Register = (on, options) => {
             return (
               <Text wrap="truncate-end">
                 <Text color={pal.accent}>{'▾ '}</Text>
-                <Text bold>{n}</Text>
-                {!isTiny && <Text dimColor> {d}  </Text>}
+                <Text bold color={pal.text}>{n}</Text>
+                {!isTiny && <Text color={pal.muted}> {d}  </Text>}
                 {!isTiny && counts(f.hunks.reduce((a, x) => a + x.added, 0), f.hunks.reduce((a, x) => a + x.removed, 0))}
               </Text>
             )
@@ -628,32 +628,32 @@ export const register: Register = (on, options) => {
                 <Text wrap="truncate-end">
                   <Text color={pal.accent}>{isSelected ? '▎' : ' '}</Text>
                   <Text color={pal.accent}>{isSelected ? '● ' : '○ '}</Text>
-                  <Text color={pal.dim}>{isCompact ? '' : (sum ? `L${sum.line}` : '').padEnd(6)}</Text>
-                  <Text bold={isSelected}>{isTiny ? snippet : snippet.padEnd(room)}</Text>
-                  {!isTiny && (x ? counts(x.added, x.removed) : <Text dimColor>{f.kind}</Text>)}
+                  <Text color={pal.muted}>{isCompact ? '' : (sum ? `L${sum.line}` : '').padEnd(6)}</Text>
+                  <Text bold={isSelected} color={pal.text}>{isTiny ? snippet : snippet.padEnd(room)}</Text>
+                  {!isTiny && (x ? counts(x.added, x.removed) : <Text color={pal.muted}>{f.kind}</Text>)}
                   {noted > 0 && <Text color={pal.accent}> ✎</Text>}
                 </Text>
               </Button>
             </Box>
           )
         })}
-        {rows.length === 0 && <Text dimColor>Nothing to review. Changes Claude makes show up here.</Text>}
+        {rows.length === 0 && <Text color={pal.muted}>Nothing to review. Changes Claude makes show up here.</Text>}
 
         <Box flexDirection="column" flexGrow={1} borderStyle="round" borderColor={pal.border} marginTop={0}>
           <Box width={IW} backgroundColor={pal.bar} justifyContent="space-between">
             <Text wrap="truncate-end">
               <Text color={pal.accent} bold> {'◆'} </Text>
               <Text bold color={pal.text}>{name || 'no file'}</Text>
-              {!isCompact && <Text color={pal.dim}> {dir}</Text>}
+              {!isCompact && <Text color={pal.muted}> {dir}</Text>}
             </Text>
             <Text wrap="truncate-end">
-              {hunk && !isCompact ? <Text color={pal.dim}>{hunk.header.split('@@')[1]?.trim()}  </Text> : null}
+              {hunk && !isCompact ? <Text color={pal.muted}>{hunk.header.split('@@')[1]?.trim()}  </Text> : null}
               {!isTiny && counts(fileAdded, fileRemoved)}
               <Text> </Text>
             </Text>
           </Box>
           <Box flexDirection="column" flexGrow={1} width={IW} backgroundColor={pal.bg}>
-            {!hunk && file && <Text color={pal.dim}>  {file.kind} file: accept or undo it as a whole.</Text>}
+            {!hunk && file && <Text color={pal.muted}>  {file.kind} file: accept or undo it as a whole.</Text>}
             {shown.flatMap((l, shownIndex) => {
               const isChanged = l.kind === 'add' || l.kind === 'del'
               const isCursor = offset + shownIndex === cursor
@@ -668,7 +668,7 @@ export const register: Register = (on, options) => {
                     <Text color={isCursor ? pal.accent : edge} bold={isCursor}>{isCursor ? '▶' : isChanged ? '▎' : ' '}</Text>
                     <Text color={pal.gutter}>{isCompact ? `${num(l.newNo ?? l.oldNo)} ` : `${num(l.oldNo)} ${num(l.newNo)} `}</Text>
                     <Text bold color={edge}>{l.kind === 'add' ? '+' : l.kind === 'del' ? '−' : ' '} </Text>
-                    {l.kind === 'meta' && <Text italic color={pal.dim}>{l.text}</Text>}
+                    {l.kind === 'meta' && <Text italic color={pal.muted}>{l.text}</Text>}
                     {tokens.map(t => (
                       <Text
                         color={pal[t.kind]}
@@ -689,7 +689,7 @@ export const register: Register = (on, options) => {
                     <Text wrap="wrap">
                       <Text color={pal.accent}>{' '.repeat(isCompact ? digits + 2 : digits * 2 + 3)}▎ ✎ </Text>
                       <Text color={pal.text}>{c.text}</Text>
-                      {c.status === 'sent' && <Text color={pal.dim}>  sent</Text>}
+                      {c.status === 'sent' && <Text color={pal.muted}>  sent</Text>}
                     </Text>
                   </Box>
                 )),
@@ -701,13 +701,13 @@ export const register: Register = (on, options) => {
                 <Box width={IW} backgroundColor={pal.bar}>
                   <Text wrap="wrap">
                     <Text color={pal.accent}>▎ ✎ </Text>
-                    <Text color={pal.dim}>L{c.line} </Text>
+                    <Text color={pal.muted}>L{c.line} </Text>
                     <Text color={pal.text}>{c.text}</Text>
                   </Text>
                 </Box>
               ))}
             {needsScroll && (
-              <Text color={pal.dim}>
+              <Text color={pal.muted}>
                 {offset > 0 ? ' ↑' : '  '} lines {offset + 1}–{Math.min(lines.length, offset + size)} of {lines.length}
                 {offset + size < lines.length ? ' ↓' : ''}   w/s to scroll
               </Text>
@@ -726,7 +726,7 @@ export const register: Register = (on, options) => {
             onSubmit={(text: string) => void saveComment($, text)}
           />
         )}
-        <Text color={confirm ? 'warning' : 'subtle'} wrap="truncate-end">{notice === '' ? ' ' : notice}</Text>
+        <Text color={confirm ? pal.accent : pal.muted} bold={confirm !== ''} wrap="truncate-end">{notice === '' ? ' ' : notice}</Text>
         <Box flexWrap="wrap" columnGap={2}>
           {hotkey('j', 'next', () => move($, 1))}
           {hotkey('k', 'prev', () => move($, -1))}
