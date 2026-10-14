@@ -108,3 +108,26 @@ test('a big review opens one file at a time, folds on demand and moves by file',
   await ui.press({ key: 'file-2' })
   await ui.unmount()
 })
+
+test('a very long hunk pages with its line cursor instead of snapping back', async ($, on) => {
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  await $.command.run({ command: 'hunks', args: 'demo long' })
+  const mount = () =>
+    $.ui.mount({
+      plugin: 'hunk-review',
+      surface: 'terminal',
+      component: 'Pane',
+      requestId: 'review',
+      props: { bodyColumns: 100, placement: 'dock', isFocused: true, scroll: { offset: 0, bodyRows: 30 } },
+    })
+  let ui = await mount()
+  expect(await ui.find({ type: 'Text', text: /item1\b/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /item100\b/ })).toBeUndefined()
+  await ui.press({ key: 'next line' })
+  for (let i = 0; i < 6; i++) await ui.press({ key: 'scroll ↓' })
+  await ui.unmount()
+  ui = await mount()
+  expect(await ui.find({ type: 'Text', text: /item1\b/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /item4\d\b/ })).toBeDefined()
+  await ui.unmount()
+})

@@ -6,7 +6,7 @@ import type { LineTarget } from './comments'
 import { buildContext, buildPrompt, describe, forHunk, lineAt, lineTarget, makeComment, normalize, onLine, reattach, unresolved } from './comments'
 import { HELP, hunkView, listText } from './text'
 import { firstRows, isFolded, materialize, stepVisible, visibleRows } from './tree'
-import { DEMO_DIFF, bigDemoDiff } from './demo'
+import { DEMO_DIFF, bigDemoDiff, longDemoDiff } from './demo'
 import { allPatch, countHunks, filePatch, hunkLines, hunkPatch, hunkSummary, parseDiff, rowsOf } from './diff'
 import { langOf, markRange, tokenize } from './highlight'
 import { paletteFor } from './theme'
@@ -285,6 +285,16 @@ const scrollDiff = async ($: Api, direction: 1 | -1) => {
   const hunk = row ? snap.files[row.fileIndex]?.hunks[row.hunkIndex] : undefined
   const total = hunk ? hunkLines(hunk).length : 0
   await update($, diffOffsetAtom, o => Math.max(0, Math.min(total - 1, o + direction * SCROLL_STEP)))
+  // The line cursor keeps the window on it, so it pages along; otherwise scrolling snaps back.
+  if (!hunk) return
+  const lines = hunkLines(hunk)
+  await update($, cursorAtom, now => {
+    if (now < 0) return now
+    let next = Math.max(0, Math.min(total - 1, now + direction * SCROLL_STEP))
+    while (next > 0 && next < total - 1 && lines[next]?.kind === 'meta') next += direction
+    return lines[next]?.kind === 'meta' ? now : next
+  })
+  await update($, composingAtom, () => '')
 }
 
 /** A folded file stands for all its hunks: the selection then acts on the file, not its first hunk. */
@@ -484,7 +494,7 @@ export const register: Register = (on, options) => {
     if (arg === 'open') return { text: await openPane($) }
     if (arg === 'restore') return { text: await restoreLast($) }
     if (verb === 'demo') {
-      const files = parseDiff(rest[0] === 'big' ? bigDemoDiff() : DEMO_DIFF)
+      const files = parseDiff(rest[0] === 'big' ? bigDemoDiff() : rest[0] === 'long' ? longDemoDiff() : DEMO_DIFF)
       await update($, snapshotAtom, () => ({ files, baseTree: 'demo', currentTree: 'demo', takenAt: Date.now() }))
       await update($, selectedAtom, () => 0)
       await update($, foldAtom, () => ({ isAuto: true, paths: [] }))

@@ -49,3 +49,9 @@ export const bigDemoDiff = (files = 40, hunks = 3): string =>
     }).join('')
     return `diff --git a/${path} b/${path}\nindex 1111111..2222222 100644\n--- a/${path}\n+++ b/${path}\n${body}`
   }).join('')
+
+/** `/hunks demo long`: one hunk of 150 changed lines, to try paging inside a hunk. */
+export const longDemoDiff = (lines = 150): string => {
+  const body = Array.from({ length: lines }, (_, i) => `+export const item${i} = ${i} * 2`).join('\n')
+  return `diff --git a/src/long.js b/src/long.js\nnew file mode 100644\nindex 0000000..2222222\n--- /dev/null\n+++ b/src/long.js\n@@ -0,0 +1,${lines} @@\n${body}\n`
+}

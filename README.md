@@ -70,6 +70,8 @@ Numbers are the ones `/hunks list` prints. Because command output is part of the
 
 With more than 12 changed files the list opens one file at a time: the selected file shows its hunks, the rest are single rows, and moving to another file opens it. Press `t` or `o` (or click a file) to take over folding yourself. A folded file is one row; `a` / `u` on it accept or undo the whole file. The list scrolls, with `▲ n more above` / `▼ n more below` markers. `/hunks list` summarises a big review per file; `/hunks list <part of a path>` lists the hunks of the files it matches, numbered as in the whole review. `/hunks demo big` opens 40 sample files to try it.
 
+A hunk longer than the pane scrolls: `s` / `w` page down and up (the line cursor moves with the page), `n` / `p` step line by line, and the footer shows which lines are in view. `/hunks demo long` opens a 150-line hunk to try it.
+
 ### Comments
 
 A comment is about **one line**. Move the cursor with `n`/`p`, press `c`, type, press Enter. The comment shows under its line and the hunk is marked `✎` in the list.
