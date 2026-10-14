@@ -44,7 +44,8 @@ While Claude works the list updates live. When a turn leaves changes you get a t
 | `f` / `d` | accept / undo the whole file |
 | `y` / `r` | accept all / undo all (`r` asks for a second press) |
 | `z` | restore the last undo |
-| `c` | comment on the cursor line (Enter saves, Enter on empty cancels) |
+| `c` | comment on the cursor line (Enter saves; Enter on an empty field removes the comment) |
+| `b` | delete the comment on the cursor line |
 | `x` | resolve the comments on this hunk |
 | `m` | send all open comments to Claude |
 | `e` | put them in the prompt box to edit first |

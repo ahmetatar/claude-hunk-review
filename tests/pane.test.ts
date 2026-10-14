@@ -131,3 +131,22 @@ test('a very long hunk pages with its line cursor instead of snapping back', asy
   expect(await ui.find({ type: 'Text', text: /item4\d\b/ })).toBeDefined()
   await ui.unmount()
 })
+
+test('the comment line is marked from the start and b deletes its comment', async ($, on) => {
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  await $.command.run({ command: 'hunks', args: 'demo' })
+  const ui = await $.ui.mount({
+    plugin: 'hunk-review',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'review',
+    props: { bodyColumns: 100, placement: 'dock', isFocused: true, scroll: { offset: 0, bodyRows: 40 } },
+  })
+  expect(await ui.find({ type: 'Text', text: /^▶/ })).toBeDefined()
+  await ui.press({ key: 'comment line 8' })
+  await ui.input({ key: 'comment', text: 'log the request id too' })
+  expect(await ui.find({ key: 'edit comment' })).toBeDefined()
+  await ui.press({ key: 'delete comment' })
+  expect(await ui.find({ key: 'edit comment' })).toBeUndefined()
+  await ui.unmount()
+})

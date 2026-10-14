@@ -352,6 +352,16 @@ const saveComment = ($: Api, text: string) =>
     await say($, await applyComment($, picked.file, picked.hunk, target, text))
   })
 
+/** Deletes the comment on the cursor's line. */
+const deleteComment = ($: Api) =>
+  serial(async () => {
+    const picked = await selectedHunk($)
+    if (!picked) return say($, 'Select a hunk first.')
+    const target = lineTarget(picked.hunk, await read($, cursorAtom))
+    await update($, composingAtom, () => '')
+    await say($, await applyComment($, picked.file, picked.hunk, target, '').then(m => (m === 'No comment written.' ? `No comment on line ${target.line}.` : m)))
+  })
+
 const resolveSelected = ($: Api) =>
   serial(async () => {
     const picked = await selectedHunk($)
@@ -653,9 +663,11 @@ export const register: Register = (on, options) => {
     const needsScroll = lines.length > budget
     const size = needsScroll ? budget - 1 : budget
     let offset = Math.max(0, Math.min(diffOffset, Math.max(0, lines.length - size)))
-    // The line cursor stays in view.
+    // The line cursor stays in view. Before one is chosen it rests on the line a comment would go to.
     if (cursor >= 0 && cursor < offset) offset = cursor
     if (cursor >= offset + size) offset = Math.min(Math.max(0, lines.length - size), cursor - size + 1)
+    const restAt = lines.findIndex(l => (l.kind === 'add' || l.kind === 'del') && l.text.trim() !== '')
+    const cursorAt = cursor >= 0 ? cursor : Math.max(0, restAt)
     const shown = lines.slice(offset, offset + size)
     const digits = String(Math.max(...lines.map(l => Math.max(l.oldNo ?? 0, l.newNo ?? 0)), 1)).length
     const num = (n: number | undefined) => (n === undefined ? ' '.repeat(digits) : String(n).padStart(digits))
@@ -760,8 +772,8 @@ export const register: Register = (on, options) => {
             {!hunk && file && !isFileFolded && <Text color={pal.muted}>  {file.kind} file: accept or undo it as a whole.</Text>}
             {shown.flatMap((l, shownIndex) => {
               const isChanged = l.kind === 'add' || l.kind === 'del'
-              const isCursor = offset + shownIndex === cursor
-              const bg = l.kind === 'add' ? pal.addBg : l.kind === 'del' ? pal.delBg : isCursor ? pal.selected : undefined
+              const isCursor = offset + shownIndex === cursorAt
+              const bg = isCursor ? pal.selected : l.kind === 'add' ? pal.addBg : l.kind === 'del' ? pal.delBg : undefined
               const wordBg = l.kind === 'add' ? pal.addWord : pal.delWord
               const edge = l.kind === 'add' ? pal.addFg : pal.delFg
               const tokens = l.kind === 'meta' ? [] : markRange(tokenize(l.text, lang), isChanged ? l.mark : undefined)
@@ -823,7 +835,7 @@ export const register: Register = (on, options) => {
           <Input
             key="comment"
             label="✎ "
-            placeholder={`comment on line ${target?.line ?? ''} · Enter saves · Enter on empty cancels`}
+            placeholder={`comment on line ${target?.line ?? ''} · Enter saves · Enter on empty removes the comment`}
             value={onTarget?.text ?? ''}
             submitLabel="save"
             autoFocus
@@ -860,6 +872,7 @@ export const register: Register = (on, options) => {
         </Box>
         <Box flexWrap="wrap" columnGap={2}>
           {hotkey('c', onTarget ? 'edit comment' : target ? `comment line ${target.line}` : 'comment', () => startComment($), pal.accent)}
+          {hotkey('b', 'delete comment', () => deleteComment($), pal.delFg)}
           {hotkey('x', 'resolve', () => resolveSelected($), pal.accent)}
           {hotkey('m', `send to Claude${openComments.length > 0 ? ` (${openComments.length})` : ''}`, async () => say($, await sendComments($, 'submit')), pal.accent)}
           {hotkey('e', 'edit in prompt', async () => say($, await sendComments($, 'fill')), pal.accent)}
