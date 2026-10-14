@@ -858,8 +858,6 @@ export const register: Register = (on, options) => {
           {hotkey('h', 'prev file', () => moveFile($, -1))}
           {hotkey('t', 'fold', () => toggleFold($))}
           {hotkey('o', 'fold all', () => toggleFoldAll($))}
-          {hotkey('n', 'next hunk', () => move($, 1))}
-          {hotkey('p', 'prev hunk', () => move($, -1))}
           {hotkey('s', 'scroll ↓', () => scrollDiff($, 1))}
           {hotkey('w', 'scroll ↑', () => scrollDiff($, -1))}
           {hotkey('g', 'refresh', () => serial(() => refresh($)))}

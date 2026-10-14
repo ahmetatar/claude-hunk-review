@@ -38,7 +38,6 @@ While Claude works the list updates live. When a turn leaves changes you get a t
 | `h` / `l` | previous / next file |
 | `t` | fold or unfold the selected file (clicking a file header does the same) |
 | `o` | fold all files, or open them all |
-| `n` / `p` | jump to the next / previous hunk |
 | `s` / `w` | scroll a long hunk |
 | `a` / `u` | accept / undo the hunk |
 | `f` / `d` | accept / undo the whole file |

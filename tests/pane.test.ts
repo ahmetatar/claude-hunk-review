@@ -29,7 +29,7 @@ test('a pane with pending hunks draws its list, diff and footer', async ($, on) 
     expect(await ui.find({ key: 'row-2' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /server\.js/ })).toBeDefined()
     expect(await ui.find({ key: 'accept' })).toBeDefined()
-    await ui.press({ key: 'next hunk' })
+    await ui.press({ key: 'next line' })
     await ui.press({ key: 'row-0' })
     await ui.unmount()
   }
