@@ -28,6 +28,7 @@ type Api = EngineInterface
 const exec = ($: Api): Exec => (argv, init) => $.process.run(argv, init)
 
 const PANE = 'review'
+const COMMENTS_TOOL = 'review_comments'
 const STORE_UNDO = 'undo-log'
 const UNDO_KEEP = 20
 const UNDO_BYTES = 1_500_000
@@ -42,7 +43,6 @@ const diffOffsetAtom = atom({ plugin: 'hunk-review', key: 'diffOffset' } as cons
 const commentsAtom = atom({ plugin: 'hunk-review', key: 'comments' } as const, [] as ReviewComment[])
 const composingAtom = atom({ plugin: 'hunk-review', key: 'composing' } as const, '')
 const cursorAtom = atom({ plugin: 'hunk-review', key: 'cursor' } as const, -1)
-const resizeAtom = atom({ plugin: 'hunk-review', key: 'resize' } as const, '')
 
 const STORE_COMMENTS = 'comments'
 const KEEP_RESOLVED_MS = 14 * 24 * 3600 * 1000
@@ -344,8 +344,6 @@ const summary = (snap: ReviewSnapshot): string =>
 
 export const register: Register = (on, options) => {
   let isRefreshQueued = false
-  let lastWidth = 0
-  let resizeTimer: { cancel: () => void } | undefined
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -353,9 +351,24 @@ export const register: Register = (on, options) => {
       description: "Review Claude's changes hunk by hunk: a pane, or text commands (/hunks list|show|accept|undo|comment|send)",
       argumentHint: '[list|show <n>|accept <n>|undo <n>|comment <n> <text>|send|open]',
     })
+    await $.tool.register({
+      name: COMMENTS_TOOL,
+      description:
+        "The person's open review comments on your changes, written in their hunk review pane. Each names " +
+        'the exact line it is about (path:line), quotes that line and its diff hunk, and says what they want. ' +
+        'Call it when they ask you to address, apply or check their review comments, or mention comments on your changes. ' +
+        'Make only the change each comment asks for, at that line.',
+      inputSchema: { type: 'object', properties: {} },
+    })
     void serial(() => refresh($))
     return next(e)
   })
+
+  on('tool.call', { tool: 'mcp__hunk-review__review_comments' }, async $ => {
+    await serial(() => refresh($))
+    const open = unresolved(await read($, commentsAtom))
+    return { result: open.length === 0 ? 'No open review comments.' : buildPrompt(open) }
+  }).catch(() => ({ deny: 'hunk-review: could not read the review comments.' }))
 
   on('command.run', { command: 'hunks' }, async ($, e) => {
     const arg = e.args.trim()
@@ -509,16 +522,6 @@ export const register: Register = (on, options) => {
     const isDocked = e.props.placement === 'dock'
     const IW = W - 2
     const isCompact = W < 72
-    const resizeHint = await read($, resizeAtom)
-
-    // A change of width means the pane is being resized: show the size with a
-    // two-way arrow for a moment. A render never writes, so timers set it.
-    if (lastWidth !== 0 && lastWidth !== W) {
-      resizeTimer?.cancel()
-      $.clock.after(0, () => void update($, resizeAtom, () => `${W}×${R}`))
-      resizeTimer = $.clock.after(1600, () => void update($, resizeAtom, () => ''))
-    }
-    lastWidth = W
     const here = file && hunk ? forHunk(allComments, file.path, hunk.id) : []
     const target = hunk ? lineTarget(hunk, cursor) : undefined
     const onTarget = target ? here.find(c => onLine(c, target)) : undefined
@@ -592,7 +595,6 @@ export const register: Register = (on, options) => {
       <Box flexDirection="column" width={W} height={isDocked ? R : undefined}>
         <Text>
           <Text bold color={pal.accent}>Review</Text>
-          {resizeHint !== '' && <Text bold color={pal.accent}>  ↔ {resizeHint}</Text>}
           <Text dimColor>  {summary(snap)}{rows.length > 0 ? `  ·  ${selected + 1}/${rows.length}` : ''}{openComments.length > 0 ? `  ·  ✎ ${openComments.length}` : ''}</Text>
         </Text>
 
@@ -635,7 +637,7 @@ export const register: Register = (on, options) => {
         })}
         {rows.length === 0 && <Text dimColor>Nothing to review. Changes Claude makes show up here.</Text>}
 
-        <Box flexDirection="column" flexGrow={1} borderStyle="round" borderColor={resizeHint !== '' ? pal.accent : pal.border} marginTop={0}>
+        <Box flexDirection="column" flexGrow={1} borderStyle="round" borderColor={pal.border} marginTop={0}>
           <Box width={IW} backgroundColor={pal.bar} justifyContent="space-between">
             <Text wrap="truncate-end">
               <Text color={pal.accent} bold> {'◆'} </Text>

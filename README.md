@@ -69,6 +69,7 @@ A comment is about **one line**. Move the cursor with `n`/`p`, press `c`, type, 
 
 `m` (or `/hunks send`) sends every open comment as one prompt. Each comment names the exact line (`src/server.js:53`), quotes that line and its hunk with the line marked, and asks Claude to change only what the comment says. `e` (or `/hunks fill`) puts the same text in the prompt box so you can edit it.
 
+- Claude can also read them itself: the mod registers a `review_comments` tool (`mcp__hunk-review__review_comments`). Tell Claude "address my review comments" and it fetches the open ones, with the lines and hunks, without you sending anything. The tool only reads; resolving stays with you (accept or `x`).
 - Comments are stored per repository and survive restarts.
 - They stay after sending, marked `sent`, and can be sent again.
 - Accepting a hunk (or file, or all) resolves its comments. Undo keeps them.
