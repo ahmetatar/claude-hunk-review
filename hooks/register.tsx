@@ -522,6 +522,8 @@ export const register: Register = (on, options) => {
     const isDocked = e.props.placement === 'dock'
     const IW = W - 2
     const isCompact = W < 72
+    // Under ~40 columns only what identifies a row fits: the code and a comment mark.
+    const isTiny = W < 40
     const here = file && hunk ? forHunk(allComments, file.path, hunk.id) : []
     const target = hunk ? lineTarget(hunk, cursor) : undefined
     const onTarget = target ? here.find(c => onLine(c, target)) : undefined
@@ -607,8 +609,8 @@ export const register: Register = (on, options) => {
               <Text wrap="truncate-end">
                 <Text color={pal.accent}>{'▾ '}</Text>
                 <Text bold>{n}</Text>
-                <Text dimColor> {d}  </Text>
-                {counts(f.hunks.reduce((a, x) => a + x.added, 0), f.hunks.reduce((a, x) => a + x.removed, 0))}
+                {!isTiny && <Text dimColor> {d}  </Text>}
+                {!isTiny && counts(f.hunks.reduce((a, x) => a + x.added, 0), f.hunks.reduce((a, x) => a + x.removed, 0))}
               </Text>
             )
           }
@@ -618,7 +620,7 @@ export const register: Register = (on, options) => {
           const sum = x ? hunkSummary(x) : undefined
           const noted = x ? forHunk(allComments, f.path, x.id).length : 0
           const tail = (x ? badge(x.added, x.removed) : f.kind) + (noted > 0 ? ' ✎' : '')
-          const room = Math.max(6, W - 4 - (isCompact ? 0 : 7) - tail.length - 2)
+          const room = isTiny ? Math.max(4, W - 6) : Math.max(6, W - 4 - (isCompact ? 0 : 7) - tail.length - 2)
           const snippet = (sum?.snippet || (x ? '(whitespace)' : f.path)).slice(0, room)
           return (
             <Box width={W} backgroundColor={isSelected ? pal.selected : undefined}>
@@ -627,8 +629,8 @@ export const register: Register = (on, options) => {
                   <Text color={pal.accent}>{isSelected ? '▎' : ' '}</Text>
                   <Text color={pal.accent}>{isSelected ? '● ' : '○ '}</Text>
                   <Text color={pal.dim}>{isCompact ? '' : (sum ? `L${sum.line}` : '').padEnd(6)}</Text>
-                  <Text bold={isSelected}>{snippet.padEnd(room)}</Text>
-                  {x ? counts(x.added, x.removed) : <Text dimColor>{f.kind}</Text>}
+                  <Text bold={isSelected}>{isTiny ? snippet : snippet.padEnd(room)}</Text>
+                  {!isTiny && (x ? counts(x.added, x.removed) : <Text dimColor>{f.kind}</Text>)}
                   {noted > 0 && <Text color={pal.accent}> ✎</Text>}
                 </Text>
               </Button>
@@ -645,8 +647,8 @@ export const register: Register = (on, options) => {
               {!isCompact && <Text color={pal.dim}> {dir}</Text>}
             </Text>
             <Text wrap="truncate-end">
-              {hunk ? <Text color={pal.dim}>{hunk.header.split('@@')[1]?.trim()}  </Text> : null}
-              {counts(fileAdded, fileRemoved)}
+              {hunk && !isCompact ? <Text color={pal.dim}>{hunk.header.split('@@')[1]?.trim()}  </Text> : null}
+              {!isTiny && counts(fileAdded, fileRemoved)}
               <Text> </Text>
             </Text>
           </Box>

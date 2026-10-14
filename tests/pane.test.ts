@@ -70,3 +70,18 @@ test('a narrow pane still draws its list, diff and keys', async ($, on) => {
   expect(await ui.find({ key: 'send to Claude' })).toBeDefined()
   await ui.unmount()
 })
+
+test('a very narrow pane keeps the code of each row', async ($, on) => {
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  await $.command.run({ command: 'hunks', args: 'demo' })
+  const ui = await $.ui.mount({
+    plugin: 'hunk-review',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'review',
+    props: { bodyColumns: 24, placement: 'dock', scroll: { offset: 0, bodyRows: 30 } },
+  })
+  expect(await ui.find({ type: 'Text', text: /app\.use/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^L\d/ })).toBeUndefined()
+  await ui.unmount()
+})
