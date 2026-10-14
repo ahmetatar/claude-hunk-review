@@ -2,7 +2,9 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { ReviewComment, ReviewFile, ReviewHunk, ReviewSnapshot } from '../types'
-import { buildContext, buildPrompt, describe, forHunk, lineTarget, makeComment, normalize, onLine, reattach, unresolved } from './comments'
+import type { LineTarget } from './comments'
+import { buildContext, buildPrompt, describe, forHunk, lineAt, lineTarget, makeComment, normalize, onLine, reattach, unresolved } from './comments'
+import { HELP, hunkView, listText } from './text'
 import { DEMO_DIFF } from './demo'
 import { allPatch, countHunks, filePatch, hunkLines, hunkPatch, hunkSummary, parseDiff, rowsOf } from './diff'
 import { langOf, markRange, tokenize } from './highlight'
@@ -255,27 +257,31 @@ const startComment = async ($: Api) => {
   await say($, '')
 }
 
-/** Saves what was typed: a new comment, a rewrite of the hunk's own, or (empty) its removal. */
+/** Writes, rewrites or (empty text) removes the comment on one line of a hunk; says what happened. */
+const applyComment = async ($: Api, file: ReviewFile, hunk: ReviewHunk, target: LineTarget, text: string): Promise<string> => {
+  const body = text.trim()
+  const existing = forHunk(await read($, commentsAtom), file.path, hunk.id).find(c => onLine(c, target))
+  if (body === '') {
+    if (!existing) return 'No comment written.'
+    await setComments($, list => list.filter(c => c.id !== existing.id))
+    return 'Comment removed.'
+  }
+  if (existing) {
+    await setComments($, list => list.map(c => (c.id === existing.id ? { ...c, text: body, status: 'open' as const } : c)))
+    return 'Comment updated.'
+  }
+  await setComments($, list => [...list, makeComment(file, hunk, body, Date.now(), target)])
+  return 'Comment saved. m sends it to Claude, e puts it in the prompt box.'
+}
+
+/** Saves what was typed in the pane's comment field, on the cursor's line. */
 const saveComment = ($: Api, text: string) =>
   serial(async () => {
     const picked = await selectedHunk($)
     await update($, composingAtom, () => '')
     if (!picked) return
-    const body = text.trim()
-    const { file, hunk } = picked
-    const target = lineTarget(hunk, await read($, cursorAtom))
-    const existing = forHunk(await read($, commentsAtom), file.path, hunk.id).find(c => onLine(c, target))
-    if (body === '') {
-      if (!existing) return
-      await setComments($, list => list.filter(c => c.id !== existing.id))
-      return say($, 'Comment removed.')
-    }
-    if (existing) {
-      await setComments($, list => list.map(c => (c.id === existing.id ? { ...c, text: body, status: 'open' as const } : c)))
-      return say($, 'Comment updated.')
-    }
-    await setComments($, list => [...list, makeComment(file, hunk, body, Date.now(), target)])
-    await say($, 'Comment saved. m sends it to Claude, e puts it in the prompt box.')
+    const target = lineTarget(picked.hunk, await read($, cursorAtom))
+    await say($, await applyComment($, picked.file, picked.hunk, target, text))
   })
 
 const resolveSelected = ($: Api) =>
@@ -322,6 +328,14 @@ const moveCursor = async ($: Api, direction: 1 | -1) => {
   })
 }
 
+/** Opens the pane; where the terminal has no room for it, answers with the review as text instead. */
+const openPane = async ($: Api): Promise<string> => {
+  const opened = await $.ui.open({ id: PANE, title: 'Review', focus: true })
+  if (opened.isPlaced) return 'Review pane opened.'
+  await serial(() => refresh($))
+  return `${listText((await read($, snapshotAtom)).files, await read($, commentsAtom))}\n(No room for the pane: ${opened.reason})`
+}
+
 const summary = (snap: ReviewSnapshot): string =>
   snap.error ?? (snap.files.length === 0
     ? 'No pending changes.'
@@ -333,8 +347,8 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'hunks',
-      description: "Review Claude's changes hunk by hunk (/hunks [send|fill|comments|clear|refresh|restore|status])",
-      argumentHint: '[send|fill|comments|clear|refresh|restore|status]',
+      description: "Review Claude's changes hunk by hunk: a pane, or text commands (/hunks list|show|accept|undo|comment|send)",
+      argumentHint: '[list|show <n>|accept <n>|undo <n>|comment <n> <text>|send|open]',
     })
     void serial(() => refresh($))
     return next(e)
@@ -342,6 +356,59 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'hunks' }, async ($, e) => {
     const arg = e.args.trim()
+    const [verb = '', ...rest] = arg.split(/\s+/)
+
+    // The review without a pane: every step below works in any terminal width.
+    if (verb === 'list' || verb === 'show' || verb === 'accept' || verb === 'undo' || verb === 'comment') {
+      await serial(() => refresh($))
+      const snap = await read($, snapshotAtom)
+      const comments = await read($, commentsAtom)
+      const rows = rowsOf(snap.files)
+      const rowAt = (n: number) => {
+        const row = rows[n - 1]
+        const file = row ? snap.files[row.fileIndex] : undefined
+        return { file, hunk: row && file && row.hunkIndex >= 0 ? file.hunks[row.hunkIndex] : undefined }
+      }
+      const bad = (what: string) => ({ text: `${what}\n${HELP}` })
+      if (verb === 'list') return { text: listText(snap.files, comments) }
+      if (rows.length === 0) return { text: 'No pending changes.' }
+
+      if (verb === 'show') {
+        const n = Number(rest[0])
+        const { file, hunk } = rowAt(n)
+        if (!file) return bad(`There is no hunk ${rest[0] ?? ''}. Use a number from /hunks list.`)
+        await select($, n - 1)
+        return { text: hunk ? hunkView(file, hunk, comments, n, rows.length) : `${file.path}  (${file.kind} file)` }
+      }
+
+      if (verb === 'comment') {
+        const m = /^comment\s+(\d+)(?::(-?\d+))?\s+([\s\S]+)$/.exec(arg)
+        if (!m) return bad('Usage: /hunks comment <n>[:line] <text>   (a minus line number means a removed line)')
+        const { file, hunk } = rowAt(Number(m[1]))
+        if (!file || !hunk) return bad(`There is no hunk ${m[1]} to comment on.`)
+        const spec = m[2]
+        const target = spec === undefined ? lineTarget(hunk, -1) : lineAt(hunk, Math.abs(Number(spec)), Number(spec) < 0)
+        if (!target) return bad(`Hunk ${m[1]} has no line ${spec}. /hunks show ${m[1]} lists its lines.`)
+        await select($, Number(m[1]) - 1)
+        return { text: await serial(() => applyComment($, file, hunk, target, m[3] ?? '')) }
+      }
+
+      // accept | undo: <n> | file <n> | all
+      const isAll = rest[0] === 'all'
+      const isFile = rest[0] === 'file'
+      if (isAll && verb === 'undo' && rest[1] !== 'yes') {
+        return { text: 'That reverts every pending change. Run `/hunks undo all yes` to confirm; `/hunks restore` brings it back.' }
+      }
+      if (!isAll) {
+        const n = Number(isFile ? rest[1] : rest[0])
+        if (!Number.isInteger(n) || n < 1 || n > rows.length) return bad(`Usage: /hunks ${verb} <n> | file <n> | all   (n is 1-${rows.length})`)
+        await select($, n - 1)
+      }
+      await act($, verb, isAll ? 'all' : isFile ? 'file' : 'row')
+      return { text: await read($, noticeAtom) }
+    }
+
+    if (arg === 'open') return { text: await openPane($) }
     if (arg === 'restore') return { text: await restoreLast($) }
     if (arg === 'demo') {
       const files = parseDiff(DEMO_DIFF)
@@ -365,8 +432,7 @@ export const register: Register = (on, options) => {
       await serial(() => refresh($))
       return { text: summary(await read($, snapshotAtom)) }
     }
-    await $.ui.open({ id: PANE, title: 'Review', focus: true })
-    return { text: 'Review pane opened.' }
+    return { text: await openPane($) }
   })
 
   // A review starts from where the turn starts: with nothing pending, take a
@@ -439,6 +505,7 @@ export const register: Register = (on, options) => {
     const R = e.props.scroll?.bodyRows ?? 30
     const isDocked = e.props.placement === 'dock'
     const IW = W - 2
+    const isCompact = W < 72
     const here = file && hunk ? forHunk(allComments, file.path, hunk.id) : []
     const target = hunk ? lineTarget(hunk, cursor) : undefined
     const onTarget = target ? here.find(c => onLine(c, target)) : undefined
@@ -535,7 +602,7 @@ export const register: Register = (on, options) => {
           const sum = x ? hunkSummary(x) : undefined
           const noted = x ? forHunk(allComments, f.path, x.id).length : 0
           const tail = (x ? badge(x.added, x.removed) : f.kind) + (noted > 0 ? ' ✎' : '')
-          const room = Math.max(6, W - 4 - 7 - tail.length - 2)
+          const room = Math.max(6, W - 4 - (isCompact ? 0 : 7) - tail.length - 2)
           const snippet = (sum?.snippet || (x ? '(whitespace)' : f.path)).slice(0, room)
           return (
             <Box width={W} backgroundColor={isSelected ? pal.selected : undefined}>
@@ -543,7 +610,7 @@ export const register: Register = (on, options) => {
                 <Text wrap="truncate-end">
                   <Text color={pal.accent}>{isSelected ? '▎' : ' '}</Text>
                   <Text color={pal.accent}>{isSelected ? '● ' : '○ '}</Text>
-                  <Text color={pal.dim}>{(sum ? `L${sum.line}` : '').padEnd(6)}</Text>
+                  <Text color={pal.dim}>{isCompact ? '' : (sum ? `L${sum.line}` : '').padEnd(6)}</Text>
                   <Text bold={isSelected}>{snippet.padEnd(room)}</Text>
                   {x ? counts(x.added, x.removed) : <Text dimColor>{f.kind}</Text>}
                   {noted > 0 && <Text color={pal.accent}> ✎</Text>}
@@ -559,7 +626,7 @@ export const register: Register = (on, options) => {
             <Text wrap="truncate-end">
               <Text color={pal.accent} bold> {'◆'} </Text>
               <Text bold color={pal.text}>{name || 'no file'}</Text>
-              <Text color={pal.dim}> {dir}</Text>
+              {!isCompact && <Text color={pal.dim}> {dir}</Text>}
             </Text>
             <Text wrap="truncate-end">
               {hunk ? <Text color={pal.dim}>{hunk.header.split('@@')[1]?.trim()}  </Text> : null}
@@ -581,7 +648,7 @@ export const register: Register = (on, options) => {
                 <Box width={IW} backgroundColor={bg}>
                   <Text wrap="truncate-end">
                     <Text color={isCursor ? pal.accent : edge} bold={isCursor}>{isCursor ? '▶' : isChanged ? '▎' : ' '}</Text>
-                    <Text color={pal.gutter}>{num(l.oldNo)} {num(l.newNo)} </Text>
+                    <Text color={pal.gutter}>{isCompact ? `${num(l.newNo ?? l.oldNo)} ` : `${num(l.oldNo)} ${num(l.newNo)} `}</Text>
                     <Text bold color={edge}>{l.kind === 'add' ? '+' : l.kind === 'del' ? '−' : ' '} </Text>
                     {l.kind === 'meta' && <Text italic color={pal.dim}>{l.text}</Text>}
                     {tokens.map(t => (
@@ -602,7 +669,7 @@ export const register: Register = (on, options) => {
                 ...lineComments.map(c => (
                   <Box width={IW} backgroundColor={pal.bar}>
                     <Text wrap="wrap">
-                      <Text color={pal.accent}>{' '.repeat(digits * 2 + 3)}▎ ✎ </Text>
+                      <Text color={pal.accent}>{' '.repeat(isCompact ? digits + 2 : digits * 2 + 3)}▎ ✎ </Text>
                       <Text color={pal.text}>{c.text}</Text>
                       {c.status === 'sent' && <Text color={pal.dim}>  sent</Text>}
                     </Text>

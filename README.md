@@ -48,6 +48,21 @@ While Claude works the list updates live. When a turn leaves changes you get a t
 
 Esc hands the keyboard back to the prompt without closing the pane. Click the pane or use `ctrl+x tab` to return to it.
 
+### No room for the pane? Use text commands
+
+Everything the pane does also works as plain commands, in any terminal width (the pane itself switches to a compact layout under about 70 columns, and `/hunks` falls back to the text list when the terminal cannot seat it):
+
+```
+/hunks list                       numbered pending hunks
+/hunks show 3                     one hunk with line numbers and its comments
+/hunks accept 3                   accept hunk 3   (accept file 3 · accept all)
+/hunks undo 3                     undo hunk 3     (undo file 3 · undo all yes)
+/hunks comment 3:53 use const     comment on line 53 of hunk 3 (3:-21 = removed line 21)
+/hunks send                       send the open comments to Claude
+```
+
+Numbers are the ones `/hunks list` prints. Because command output is part of the conversation, Claude sees it too.
+
 ### Comments
 
 A comment is about **one line**. Move the cursor with `n`/`p`, press `c`, type, press Enter. The comment shows under its line and the hunk is marked `✎` in the list.
@@ -63,7 +78,8 @@ A comment is about **one line**. Move the cursor with `n`/`p`, press `c`, type, 
 
 | Command | |
 | --- | --- |
-| `/hunks` | open the pane |
+| `/hunks` | open the pane (the text list if it does not fit) |
+| `/hunks list` · `show <n>` · `accept` · `undo` · `comment` | the review as text, see above |
 | `/hunks send` / `/hunks fill` | send the open comments / put them in the prompt box |
 | `/hunks comments` | list open comments |
 | `/hunks clear` | delete resolved comments |

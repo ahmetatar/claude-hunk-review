@@ -1,7 +1,8 @@
 import { expect, test } from 'claude-code/testing'
 
 import { allPatch, countHunks, hunkLines, hunkPatch, hunkSummary, parseDiff, rowsOf } from '../hooks/diff'
-import { buildPrompt, forHunk, isAttached, lineTarget, makeComment, normalize, onLine, reattach, unresolved } from '../hooks/comments'
+import { buildPrompt, forHunk, isAttached, lineAt, lineTarget, makeComment, normalize, onLine, reattach, unresolved } from '../hooks/comments'
+import { hunkView, listText } from '../hooks/text'
 import { langOf, markRange, tokenize } from '../hooks/highlight'
 
 const MODIFIED = `diff --git a/src/a.js b/src/a.js
@@ -181,4 +182,29 @@ test('comments saved by an earlier version are filled in rather than breaking a 
   expect(old.lineText).toBe('let a')
   expect(old.isOld).toBe(false)
   expect(buildPrompt([old]).includes('x.js:7')).toBe(true)
+})
+
+test('the text review lists and shows hunks without a pane', async () => {
+  const files = parseDiff(MODIFIED + ADDED)
+  const c = makeComment(files[0]!, files[0]!.hunks[1]!, 'use const here', 1, lineTarget(files[0]!.hunks[1]!, 2))
+  const list = listText(files, [c])
+  expect(list.includes('3 hunks pending')).toBe(true)
+  expect(list.includes('1 open comment')).toBe(true)
+  expect(list.includes('src/a.js:2')).toBe(true)
+  expect(list.includes('✎1')).toBe(true)
+  expect(listText([], [])).toBe('No pending changes.')
+
+  const view = hunkView(files[0]!, files[0]!.hunks[1]!, [c], 2, 3)
+  expect(view.includes('hunk 2/3')).toBe(true)
+  expect(view.includes('+ 22 z')).toBe(true)
+  expect(view.includes('✎ use const here')).toBe(true)
+  expect(view.includes('/hunks accept 2')).toBe(true)
+})
+
+test('a line is found by number, and a removed line by its old number', async () => {
+  const hunk = parseDiff(MODIFIED)[0]!.hunks[1]!
+  expect(lineAt(hunk, 22, false)?.text).toBe('z')
+  expect(lineAt(hunk, 21, true)?.text).toBe('y')
+  expect(lineAt(hunk, 22, true)).toBeNull()
+  expect(lineAt(hunk, 99, false)).toBeNull()
 })

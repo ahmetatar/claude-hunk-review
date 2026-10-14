@@ -54,3 +54,19 @@ test('writing a comment shows it under the hunk and marks the list row', async (
   expect(await ui.find({ key: 'send to Claude (1)' })).toBeDefined()
   await ui.unmount()
 })
+
+test('a narrow pane still draws its list, diff and keys', async ($, on) => {
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  await $.command.run({ command: 'hunks', args: 'demo' })
+  const ui = await $.ui.mount({
+    plugin: 'hunk-review',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'review',
+    props: { bodyColumns: 48, placement: 'inline', scroll: { offset: 0, bodyRows: 18 } },
+  })
+  expect(await ui.find({ key: 'row-0' })).toBeDefined()
+  expect(await ui.find({ key: 'accept' })).toBeDefined()
+  expect(await ui.find({ key: 'send to Claude' })).toBeDefined()
+  await ui.unmount()
+})

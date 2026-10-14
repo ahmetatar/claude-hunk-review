@@ -44,6 +44,14 @@ export const lineTarget = (hunk: Pick<ReviewHunk, 'text'>, cursor: number): Line
   return targetOfLine(at && at.kind !== 'meta' ? at : first ?? { kind: 'ctx', text: '' })
 }
 
+/** The line `line` of a hunk (new-file numbering, or old-file when `isOld`), if the hunk has it. */
+export const lineAt = (hunk: Pick<ReviewHunk, 'text'>, line: number, isOld: boolean): LineTarget | null => {
+  const found = hunkLines(hunk).find(
+    l => l.kind !== 'meta' && (l.kind === 'del') === isOld && (l.newNo ?? l.oldNo) === line,
+  )
+  return found ? targetOfLine(found) : null
+}
+
 const span = (hunk: string): [number, number] => {
   const nos = hunkLines({ text: hunk }).map(l => l.newNo ?? l.oldNo ?? 0).filter(n => n > 0)
   return [Math.min(...nos, Infinity) === Infinity ? 0 : Math.min(...nos), Math.max(0, ...nos)]
