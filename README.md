@@ -5,16 +5,18 @@ A review pane for [Claude Code](https://code.claude.com). Let Claude write, then
 It is a Claude Code *mod* (a function-hooks plugin), so it lives inside the terminal session: no editor, no extra window. Review state is part of the Claude session, which is what lets comments reach Claude.
 
 > **Early access.** Claude Code's mod API is early access and may change between releases. Built and tested against Claude Code 2.1.296.
+![The review pane: file list, hunk list, highlighted diff and key bar](docs/review-pane.png)
+
 
 ## Install
 
 In a Claude Code session:
 
 ```
-/plugin install hunk-review --marketplace <owner>/<repo>
+/plugin install hunk-review --marketplace ahmetatar/claude-hunk-review
 ```
 
-(`<owner>/<repo>` is the GitHub repository that holds this project.) Answer `y` to add the marketplace and pick a scope. To try it from a checkout without installing:
+(`ahmetatar/claude-hunk-review` is the GitHub repository that holds this project.) Answer `y` to add the marketplace and pick a scope. To try it from a checkout without installing:
 
 ```
 claude --plugin-dir /path/to/claude-hunk-review
