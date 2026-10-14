@@ -1,0 +1,15 @@
+{
+  "name": "hunk-review",
+  "owner": { "name": "Ahmet Atar" },
+  "metadata": {
+    "description": "A hunk-by-hunk review pane for the changes Claude Code makes."
+  },
+  "plugins": [
+    {
+      "name": "hunk-review",
+      "source": "./",
+      "description": "Review Claude's changes hunk by hunk in a pane: accept, undo and comment on single lines, and send the comments back to Claude.",
+      "version": "0.1.0"
+    }
+  ]
+}
