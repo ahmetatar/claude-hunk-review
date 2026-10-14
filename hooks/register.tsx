@@ -621,7 +621,7 @@ export const register: Register = (on, options) => {
       file !== undefined && hunk !== undefined && target !== undefined &&
       composing === keyOf(file.path, hunk.id, target.line, target.isOld)
     const openComments = unresolved(allComments)
-    const commentRows = here.reduce((n, c) => n + Math.ceil((c.text.length + 10) / Math.max(10, IW)), 0)
+    const commentRows = here.reduce((n, c) => n + Math.ceil((c.text.length + 20) / Math.max(10, IW * 0.85)), 0)
 
     const split = (path: string) => {
       const at = path.lastIndexOf('/')
@@ -668,7 +668,7 @@ export const register: Register = (on, options) => {
     const hasBelow = first + listSize < items.length
     const visible = items.slice(first + (hasAbove ? 1 : 0), first + listSize - (hasBelow ? 1 : 0))
 
-    const budget = Math.max(4, R - (1 + listSize + 1 + 2 + 1 + 3 + (isComposing ? 1 : 0) + commentRows))
+    const budget = Math.max(4, R - (1 + listSize + 1 + 2 + 1 + 3 + (isComposing ? 2 : 0) + commentRows))
     const lines = hunk ? hunkLines(hunk) : []
     const needsScroll = lines.length > budget
     const size = needsScroll ? budget - 1 : budget
