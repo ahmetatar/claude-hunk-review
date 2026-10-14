@@ -34,11 +34,11 @@ While Claude works the list updates live. When a turn leaves changes you get a t
 
 | Key | Action |
 | --- | --- |
-| `j` / `k` | next / previous hunk |
+| `j` / `k` | next / previous line; past the end of a hunk the cursor moves on into the next (or previous) hunk and file |
 | `h` / `l` | previous / next file |
 | `t` | fold or unfold the selected file (clicking a file header does the same) |
 | `o` | fold all files, or open them all |
-| `n` / `p` | move the line cursor inside the hunk |
+| `n` / `p` | jump to the next / previous hunk |
 | `s` / `w` | scroll a long hunk |
 | `a` / `u` | accept / undo the hunk |
 | `f` / `d` | accept / undo the whole file |
@@ -73,11 +73,11 @@ Numbers are the ones `/hunks list` prints. Because command output is part of the
 
 With more than 12 changed files the list opens one file at a time: the selected file shows its hunks, the rest are single rows, and moving to another file opens it. Press `t` or `o` (or click a file) to take over folding yourself. A folded file is one row; `a` / `u` on it accept or undo the whole file. The list scrolls, with `▲ n more above` / `▼ n more below` markers. `/hunks list` summarises a big review per file; `/hunks list <part of a path>` lists the hunks of the files it matches, numbered as in the whole review. `/hunks demo big` opens 40 sample files to try it.
 
-A hunk longer than the pane scrolls: `s` / `w` page down and up (the line cursor moves with the page), `n` / `p` step line by line, and the footer shows which lines are in view. `/hunks demo long` opens a 150-line hunk to try it.
+A hunk longer than the pane scrolls: `s` / `w` page down and up (the line cursor moves with the page), `j` / `k` step line by line, and the footer shows which lines are in view. `/hunks demo long` opens a 150-line hunk to try it.
 
 ### Comments
 
-A comment is about **one line**. Move the cursor with `n`/`p`, press `c`, type, press Enter. The comment shows under its line and the hunk is marked `✎` in the list.
+A comment is about **one line**. Move the cursor with `j`/`k`, press `c`, type, press Enter. The comment shows under its line and the hunk is marked `✎` in the list.
 
 `m` (or `/hunks send`) sends every open comment as one prompt. Each comment names the exact line (`src/server.js:53`), quotes that line and its hunk with the line marked, and asks Claude to change only what the comment says. `e` (or `/hunks fill`) puts the same text in the prompt box so you can edit it.
 

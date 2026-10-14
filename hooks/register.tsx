@@ -391,19 +391,27 @@ const sendComments = ($: Api, mode: 'submit' | 'fill'): Promise<string> =>
 /** Moves the line cursor within the selected hunk; the first press lands on its first changed line. */
 const moveCursor = async ($: Api, direction: 1 | -1) => {
   const snap = await read($, snapshotAtom)
-  const row = rowsOf(snap.files)[await read($, selectedAtom)]
+  const selected = await read($, selectedAtom)
+  const row = rowsOf(snap.files)[selected]
   const hunk = row ? snap.files[row.fileIndex]?.hunks[row.hunkIndex] : undefined
-  if (!hunk || (await isSelectionFolded($))) return
+  if (!hunk || (await isSelectionFolded($))) return move($, direction)
   const lines = hunkLines(hunk)
   const isReal = (i: number) => lines[i] !== undefined && lines[i]?.kind !== 'meta'
-  const firstChanged = Math.max(0, lines.findIndex(l => l.kind === 'add' || l.kind === 'del'))
+  const firstChanged = Math.max(0, lines.findIndex(l => (l.kind === 'add' || l.kind === 'del') && l.text.trim() !== ''))
+  const cursor = await read($, cursorAtom)
+  let next = (cursor >= 0 ? cursor : firstChanged) + direction
+  while (next >= 0 && next < lines.length && !isReal(next)) next += direction
   await update($, composingAtom, () => '')
-  await update($, cursorAtom, now => {
-    if (now < 0) return firstChanged
-    let next = now + direction
-    while (next >= 0 && next < lines.length && !isReal(next)) next += direction
-    return next >= 0 && next < lines.length ? next : now
-  })
+  if (next >= 0 && next < lines.length) return void (await update($, cursorAtom, () => next))
+  // Past the hunk's edge the cursor carries on into the neighbouring hunk (or file).
+  await move($, direction)
+  if (direction > 0 || (await read($, selectedAtom)) === selected) return
+  const after = rowsOf(snap.files)[await read($, selectedAtom)]
+  const prev = after ? snap.files[after.fileIndex]?.hunks[after.hunkIndex] : undefined
+  if (!prev) return
+  const prevLines = hunkLines(prev)
+  const last = prevLines.map((l, i) => (l.kind === 'meta' ? -1 : i)).filter(i => i >= 0).pop()
+  if (last !== undefined) await update($, cursorAtom, () => last)
 }
 
 /** Opens the pane; where the terminal has no room for it, answers with the review as text instead. */
@@ -844,14 +852,14 @@ export const register: Register = (on, options) => {
         )}
         <Text color={confirm ? pal.accent : pal.muted} bold={confirm !== ''} wrap="truncate-end">{notice === '' ? ' ' : notice}</Text>
         <Box flexWrap="wrap" columnGap={2}>
-          {hotkey('j', 'next', () => move($, 1))}
-          {hotkey('k', 'prev', () => move($, -1))}
+          {hotkey('j', 'next line', () => moveCursor($, 1))}
+          {hotkey('k', 'prev line', () => moveCursor($, -1))}
           {hotkey('l', 'next file', () => moveFile($, 1))}
           {hotkey('h', 'prev file', () => moveFile($, -1))}
           {hotkey('t', 'fold', () => toggleFold($))}
           {hotkey('o', 'fold all', () => toggleFoldAll($))}
-          {hotkey('n', 'next line', () => moveCursor($, 1))}
-          {hotkey('p', 'prev line', () => moveCursor($, -1))}
+          {hotkey('n', 'next hunk', () => move($, 1))}
+          {hotkey('p', 'prev hunk', () => move($, -1))}
           {hotkey('s', 'scroll ↓', () => scrollDiff($, 1))}
           {hotkey('w', 'scroll ↑', () => scrollDiff($, -1))}
           {hotkey('g', 'refresh', () => serial(() => refresh($)))}

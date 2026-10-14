@@ -102,7 +102,7 @@ Develop in this repo; load with `claude --plugin-dir ~/Desktop/Repos/claude-hunk
 
 ## Status (2026-10-13)
 - **M0-M2 done:** baseline tree ref, per-hunk / file / all accept (folded into the baseline) and undo, `z` restores the last undo, live refresh, themed editor-style pane.
-- **M3 done:** persistent line-level comments (`n`/`p` line cursor, `c`), send (`m`, `/hunks send`) or edit-in-prompt (`e`, `/hunks fill`), optional `injectComments`, accept resolves comments, comments follow a re-edited hunk.
+- **M3 done:** persistent line-level comments (`j`/`k` line cursor, `c`), send (`m`, `/hunks send`) or edit-in-prompt (`e`, `/hunks fill`), optional `injectComments`, accept resolves comments, comments follow a re-edited hunk.
 - **Decisions taken:** accept folds into the baseline (not a ledger); `injectComments` is an option, default off; mod is meant to be shared (marketplace file comes with M4).
 - **M4 so far:** README, MIT license and marketplace.json done; narrow-terminal support done (compact pane layout under 72 columns, text commands `/hunks list|show|accept|undo|comment`, `/hunks` falls back to the text list when the pane cannot be placed).
 - **Claude tool done:** `mcp__hunk-review__review_comments` (read-only, deferred behind ToolSearch) returns the open comments in the same format `send` uses.
