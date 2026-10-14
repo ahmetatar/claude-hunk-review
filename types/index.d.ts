@@ -75,6 +75,8 @@ declare module 'claude-code' {
       composing: string
       /** Line cursor inside the selected hunk's diff: an index into its lines, -1 for none. */
       cursor: number
+      /** `<columns>×<rows>` for a moment after the pane is resized; empty otherwise. */
+      resize: string
     }
   }
 }
