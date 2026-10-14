@@ -37,3 +37,15 @@ index 0000000..3333333
 +
 +A fixture for the review pane.
 `
+
+/** `/hunks demo big`: many files, a few hunks each, to see folding and long lists. */
+export const bigDemoDiff = (files = 40, hunks = 3): string =>
+  Array.from({ length: files }, (_, f) => {
+    const dir = ['src', 'src/routes', 'src/lib', 'test'][f % 4]
+    const path = `${dir}/module${f}.js`
+    const body = Array.from({ length: hunks }, (_, h) => {
+      const at = h * 30 + 1
+      return `@@ -${at},3 +${at},4 @@\n const a${h} = ${f}\n+const b${h} = a${h} + ${h}\n const c${h} = ${h}\n export { a${h} }\n`
+    }).join('')
+    return `diff --git a/${path} b/${path}\nindex 1111111..2222222 100644\n--- a/${path}\n+++ b/${path}\n${body}`
+  }).join('')

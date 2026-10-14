@@ -9,8 +9,18 @@ export const HELP =
 
 const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text)
 
-/** The pending hunks as a numbered list: the review without a pane. */
-export const listText = (files: readonly ReviewFile[], comments: readonly ReviewComment[]): string => {
+const GROUP_ABOVE = 40
+
+/**
+ * The pending hunks as a numbered list: the review without a pane. A review of
+ * many hunks is summarised per file instead; a filter (part of a path) lists the
+ * hunks of the files it matches, numbered as in the whole review.
+ */
+export const listText = (
+  files: readonly ReviewFile[],
+  comments: readonly ReviewComment[],
+  filter = '',
+): string => {
   if (files.length === 0) return 'No pending changes.'
   const open = unresolved(comments).length
   const head =
@@ -18,7 +28,24 @@ export const listText = (files: readonly ReviewFile[], comments: readonly Review
     (open > 0 ? ` · ${open} open comment${open === 1 ? '' : 's'}` : '')
   const rows = rowsOf(files)
   const width = String(rows.length).length
-  const lines = rows.map((row, i) => {
+  const wanted = filter === '' ? rows.map((r, i) => i) : rows.map((r, i) => i).filter(i => files[rows[i]!.fileIndex]?.path.includes(filter))
+  if (wanted.length === 0) return `${head}\nNo pending hunks in files matching "${filter}".`
+
+  if (filter === '' && rows.length > GROUP_ABOVE) {
+    const lines = files.map((file, fileIndex) => {
+      const idx = rows.map((r, i) => (r.fileIndex === fileIndex ? i + 1 : 0)).filter(Boolean)
+      const noted = file.hunks.reduce((n, h) => n + forHunk(comments, file.path, h.id).length, 0)
+      const range = idx.length > 1 ? `${idx[0]}-${idx[idx.length - 1]}` : `${idx[0]}`
+      const added = file.hunks.reduce((n, h) => n + h.added, 0)
+      const removed = file.hunks.reduce((n, h) => n + h.removed, 0)
+      const counts = [added > 0 ? `+${added}` : '', removed > 0 ? `−${removed}` : ''].filter(Boolean).join(' ')
+      return `${file.path}  hunks ${range}${file.hunks.length > 1 ? ` (${file.hunks.length})` : ''}  ${file.hunks.length === 0 ? file.kind : counts}${noted > 0 ? `  ✎${noted}` : ''}`
+    })
+    return [head, ...lines, '', 'Many hunks: /hunks list <part of a path> lists the hunks of matching files.', HELP].join('\n')
+  }
+
+  const lines = wanted.map(i => {
+    const row = rows[i]!
     const file = files[row.fileIndex]
     const hunk = row.hunkIndex >= 0 ? file?.hunks[row.hunkIndex] : undefined
     const no = String(i + 1).padStart(width)

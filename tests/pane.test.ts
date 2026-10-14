@@ -85,3 +85,26 @@ test('a very narrow pane keeps the code of each row', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: /^L\d/ })).toBeUndefined()
   await ui.unmount()
 })
+
+test('a big review opens one file at a time, folds on demand and moves by file', async ($, on) => {
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  await $.command.run({ command: 'hunks', args: 'demo big' })
+  const ui = await $.ui.mount({
+    plugin: 'hunk-review',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'review',
+    props: { bodyColumns: 100, placement: 'dock', isFocused: true, scroll: { offset: 0, bodyRows: 40 } },
+  })
+  // Automatic folding: only the selected file shows its hunks.
+  expect(await ui.find({ key: 'row-0' })).toBeDefined()
+  expect(await ui.find({ key: 'row-3' })).toBeUndefined()
+  expect(await ui.find({ key: 'file-1' })).toBeDefined()
+  await ui.press({ key: 'next file' })
+  expect(await ui.find({ key: 'row-3' })).toBeDefined()
+  expect(await ui.find({ key: 'row-0' })).toBeUndefined()
+  await ui.press({ key: 'fold all' })
+  await ui.press({ key: 'fold' })
+  await ui.press({ key: 'file-2' })
+  await ui.unmount()
+})

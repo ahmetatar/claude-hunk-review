@@ -106,5 +106,6 @@ Develop in this repo; load with `claude --plugin-dir ~/Desktop/Repos/claude-hunk
 - **Decisions taken:** accept folds into the baseline (not a ledger); `injectComments` is an option, default off; mod is meant to be shared (marketplace file comes with M4).
 - **M4 so far:** README, MIT license and marketplace.json done; narrow-terminal support done (compact pane layout under 72 columns, text commands `/hunks list|show|accept|undo|comment`, `/hunks` falls back to the text list when the pane cannot be placed).
 - **Claude tool done:** `mcp__hunk-review__review_comments` (read-only, deferred behind ToolSearch) returns the open comments in the same format `send` uses.
-- **Open for M4:** paging for very large diffs, screenshots in the README, a GitHub repo to publish to.
+- **Big reviews done:** per-file folding (`t`, `o`, click), automatic one-file-at-a-time above 12 files, `h`/`l` file navigation, scroll markers, `/hunks list [filter]` grouped per file, `/hunks demo big`.
+- **Open for M4:** paging inside a single very large hunk, screenshots in the README, a GitHub repo to publish to.
 - **Known quirks:** Esc hands the keyboard back instead of closing the pane (`q` closes); the engine's "panes keep their open-time settings" means reopen `/hunks` after a code change.

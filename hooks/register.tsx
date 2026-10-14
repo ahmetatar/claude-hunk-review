@@ -5,7 +5,8 @@ import type { ReviewComment, ReviewFile, ReviewHunk, ReviewSnapshot } from '../t
 import type { LineTarget } from './comments'
 import { buildContext, buildPrompt, describe, forHunk, lineAt, lineTarget, makeComment, normalize, onLine, reattach, unresolved } from './comments'
 import { HELP, hunkView, listText } from './text'
-import { DEMO_DIFF } from './demo'
+import { firstRows, isFolded, materialize, stepVisible, visibleRows } from './tree'
+import { DEMO_DIFF, bigDemoDiff } from './demo'
 import { allPatch, countHunks, filePatch, hunkLines, hunkPatch, hunkSummary, parseDiff, rowsOf } from './diff'
 import { langOf, markRange, tokenize } from './highlight'
 import { paletteFor } from './theme'
@@ -43,6 +44,7 @@ const diffOffsetAtom = atom({ plugin: 'hunk-review', key: 'diffOffset' } as cons
 const commentsAtom = atom({ plugin: 'hunk-review', key: 'comments' } as const, [] as ReviewComment[])
 const composingAtom = atom({ plugin: 'hunk-review', key: 'composing' } as const, '')
 const cursorAtom = atom({ plugin: 'hunk-review', key: 'cursor' } as const, -1)
+const foldAtom = atom({ plugin: 'hunk-review', key: 'fold' } as const, { isAuto: true, paths: [] as string[] })
 
 const STORE_COMMENTS = 'comments'
 const KEEP_RESOLVED_MS = 14 * 24 * 3600 * 1000
@@ -222,12 +224,58 @@ const select = ($: Api, index: number) =>
     update($, cursorAtom, () => -1),
   ])
 
-const move = async ($: Api, delta: number) => {
+const selectedFile = async ($: Api) => {
   const snap = await read($, snapshotAtom)
-  const count = rowsOf(snap.files).length
-  const now = await read($, selectedAtom)
-  await select($, Math.max(0, Math.min(count - 1, now + delta)))
+  const row = rowsOf(snap.files)[await read($, selectedAtom)]
+  return { snap, row, file: row ? snap.files[row.fileIndex] : undefined }
 }
+
+/** j/k: one visible row at a time. A folded file counts as one row. */
+const move = async ($: Api, delta: number) => {
+  const { snap, file } = await selectedFile($)
+  const now = await read($, selectedAtom)
+  const visible = visibleRows(snap.files, file?.path, await read($, foldAtom))
+  await select($, stepVisible(visible, now, delta))
+}
+
+/** h/l: the first row of the previous / next file. */
+const moveFile = async ($: Api, delta: number) => {
+  const { snap, row } = await selectedFile($)
+  const starts = firstRows(snap.files)
+  const at = row ? starts.indexOf(rowsOf(snap.files).findIndex(r => r.fileIndex === row.fileIndex)) : 0
+  const next = starts[Math.max(0, Math.min(starts.length - 1, at + delta))]
+  if (next !== undefined) await select($, next)
+}
+
+/** t: fold or unfold the selected file; the selection moves to the file's first row. */
+const toggleFold = async ($: Api) => {
+  const { snap, file, row } = await selectedFile($)
+  if (!file || !row) return
+  const fold = materialize(snap.files, file.path, await read($, foldAtom))
+  const wasFolded = fold.paths.includes(file.path)
+  await update($, foldAtom, () => ({
+    isAuto: false,
+    paths: wasFolded ? fold.paths.filter(p => p !== file.path) : [...fold.paths, file.path],
+  }))
+  const first = rowsOf(snap.files).findIndex(r => r.fileIndex === row.fileIndex)
+  if (!wasFolded && first >= 0) await select($, first)
+  await update($, cursorAtom, () => -1)
+}
+
+/** o: fold every file, or, when all are folded, open them all. */
+const toggleFoldAll = async ($: Api) => {
+  const { snap, file, row } = await selectedFile($)
+  const fold = materialize(snap.files, file?.path, await read($, foldAtom))
+  const isAllFolded = snap.files.every(f => fold.paths.includes(f.path))
+  await update($, foldAtom, () => ({ isAuto: false, paths: isAllFolded ? [] : snap.files.map(f => f.path) }))
+  if (!isAllFolded && row) {
+    const first = rowsOf(snap.files).findIndex(r => r.fileIndex === row.fileIndex)
+    if (first >= 0) await select($, first)
+  }
+}
+
+/** a / u on the selection: a folded file is accepted or undone as a whole. */
+const actSelected = async ($: Api, verb: Verb) => act($, verb, (await isSelectionFolded($)) ? 'file' : 'row')
 
 const SCROLL_STEP = 8
 
@@ -239,6 +287,14 @@ const scrollDiff = async ($: Api, direction: 1 | -1) => {
   await update($, diffOffsetAtom, o => Math.max(0, Math.min(total - 1, o + direction * SCROLL_STEP)))
 }
 
+/** A folded file stands for all its hunks: the selection then acts on the file, not its first hunk. */
+const isSelectionFolded = async ($: Api): Promise<boolean> => {
+  const snap = await read($, snapshotAtom)
+  const row = rowsOf(snap.files)[await read($, selectedAtom)]
+  const file = row ? snap.files[row.fileIndex] : undefined
+  return file !== undefined && isFolded(file.path, snap.files, file.path, await read($, foldAtom))
+}
+
 type Chosen = { file: ReviewFile; hunk: ReviewHunk } | null
 
 const selectedHunk = async ($: Api): Promise<Chosen> => {
@@ -246,6 +302,7 @@ const selectedHunk = async ($: Api): Promise<Chosen> => {
   const row = rowsOf(snap.files)[await read($, selectedAtom)]
   const file = row ? snap.files[row.fileIndex] : undefined
   const hunk = row && file && row.hunkIndex >= 0 ? file.hunks[row.hunkIndex] : undefined
+  if (file && (await isSelectionFolded($))) return null
   return file && hunk ? { file, hunk } : null
 }
 
@@ -316,7 +373,7 @@ const moveCursor = async ($: Api, direction: 1 | -1) => {
   const snap = await read($, snapshotAtom)
   const row = rowsOf(snap.files)[await read($, selectedAtom)]
   const hunk = row ? snap.files[row.fileIndex]?.hunks[row.hunkIndex] : undefined
-  if (!hunk) return
+  if (!hunk || (await isSelectionFolded($))) return
   const lines = hunkLines(hunk)
   const isReal = (i: number) => lines[i] !== undefined && lines[i]?.kind !== 'meta'
   const firstChanged = Math.max(0, lines.findIndex(l => l.kind === 'add' || l.kind === 'del'))
@@ -386,7 +443,7 @@ export const register: Register = (on, options) => {
         return { file, hunk: row && file && row.hunkIndex >= 0 ? file.hunks[row.hunkIndex] : undefined }
       }
       const bad = (what: string) => ({ text: `${what}\n${HELP}` })
-      if (verb === 'list') return { text: listText(snap.files, comments) }
+      if (verb === 'list') return { text: listText(snap.files, comments, rest.join(' ')) }
       if (rows.length === 0) return { text: 'No pending changes.' }
 
       if (verb === 'show') {
@@ -426,10 +483,11 @@ export const register: Register = (on, options) => {
 
     if (arg === 'open') return { text: await openPane($) }
     if (arg === 'restore') return { text: await restoreLast($) }
-    if (arg === 'demo') {
-      const files = parseDiff(DEMO_DIFF)
+    if (verb === 'demo') {
+      const files = parseDiff(rest[0] === 'big' ? bigDemoDiff() : DEMO_DIFF)
       await update($, snapshotAtom, () => ({ files, baseTree: 'demo', currentTree: 'demo', takenAt: Date.now() }))
       await update($, selectedAtom, () => 0)
+      await update($, foldAtom, () => ({ isAuto: true, paths: [] }))
       await $.ui.open({ id: PANE, title: 'Review', focus: true })
       return { text: 'Review pane opened with demo data (g refreshes from git).' }
     }
@@ -513,10 +571,12 @@ export const register: Register = (on, options) => {
     const allComments = await read($, commentsAtom)
     const composing = await read($, composingAtom)
     const cursor = await read($, cursorAtom)
+    const fold = await read($, foldAtom)
     const rows = rowsOf(snap.files)
     const current = rows[selected]
     const file = current ? snap.files[current.fileIndex] : undefined
-    const hunk = current && file && current.hunkIndex >= 0 ? file.hunks[current.hunkIndex] : undefined
+    const isFileFolded = file !== undefined && isFolded(file.path, snap.files, file.path, fold)
+    const hunk = !isFileFolded && current && file && current.hunkIndex >= 0 ? file.hunks[current.hunkIndex] : undefined
     const W = e.props.bodyColumns ?? e.viewport?.columns ?? 80
     const R = e.props.scroll?.bodyRows ?? 30
     const isDocked = e.props.placement === 'dock'
@@ -549,19 +609,34 @@ export const register: Register = (on, options) => {
       </Text>
     )
 
-    // The list: a header per file, a row per hunk, windowed around the selection.
-    type Item = { rowIndex: number; fileIndex: number; hunkIndex: number }
+    // The list: a header per file (a click folds it), a row per hunk of an open file,
+    // windowed around the selection. A folded file is one row; the selection sits on it.
+    type Item = { rowIndex: number; fileIndex: number; hunkIndex: number; isHeader: boolean; isFolded: boolean }
     const items: Item[] = []
-    let rowIndex = 0
-    snap.files.forEach((f, fileIndex) => {
-      if (f.hunks.length === 0) return void items.push({ rowIndex: rowIndex++, fileIndex, hunkIndex: -1 })
-      items.push({ rowIndex: -1, fileIndex, hunkIndex: -1 })
-      f.hunks.forEach((_, hunkIndex) => items.push({ rowIndex: rowIndex++, fileIndex, hunkIndex }))
-    })
-    const listSize = Math.max(1, Math.min(items.length, Math.floor(R * 0.32)))
-    const at = items.findIndex(it => it.rowIndex === selected)
+    {
+      let at = 0
+      snap.files.forEach((f, fileIndex) => {
+        const folded = f.hunks.length > 0 && isFolded(f.path, snap.files, file?.path, fold)
+        if (f.hunks.length === 0) return void items.push({ rowIndex: at++, fileIndex, hunkIndex: -1, isHeader: false, isFolded: false })
+        if (folded) {
+          items.push({ rowIndex: at, fileIndex, hunkIndex: -1, isHeader: true, isFolded: true })
+          at += f.hunks.length
+          return
+        }
+        items.push({ rowIndex: -1, fileIndex, hunkIndex: -1, isHeader: true, isFolded: false })
+        f.hunks.forEach((_, hunkIndex) => items.push({ rowIndex: at++, fileIndex, hunkIndex, isHeader: false, isFolded: false }))
+      })
+    }
+    const listSize = Math.min(items.length, Math.max(3, Math.floor(R * 0.32)))
+    // Selection on a hidden row of a folded file counts as being on that file's row.
+    const at = Math.max(
+      0,
+      items.findIndex(it => (it.rowIndex === selected && (!it.isHeader || it.isFolded)) || (it.isFolded && it.fileIndex === current?.fileIndex)),
+    )
     const first = Math.max(0, Math.min(at - Math.floor(listSize / 2), items.length - listSize))
-    const visible = items.slice(first, first + listSize)
+    const hasAbove = first > 0
+    const hasBelow = first + listSize < items.length
+    const visible = items.slice(first + (hasAbove ? 1 : 0), first + listSize - (hasBelow ? 1 : 0))
 
     const budget = Math.max(4, R - (1 + listSize + 1 + 2 + 1 + 3 + (isComposing ? 1 : 0) + commentRows))
     const lines = hunk ? hunkLines(hunk) : []
@@ -600,18 +675,33 @@ export const register: Register = (on, options) => {
           <Text color={pal.muted}>  {summary(snap)}{rows.length > 0 ? `  ·  ${selected + 1}/${rows.length}` : ''}{openComments.length > 0 ? `  ·  ✎ ${openComments.length}` : ''}</Text>
         </Text>
 
+        {hasAbove && <Text color={pal.muted}>  ▲ {first + 1} more above</Text>}
         {visible.map(it => {
           const f = snap.files[it.fileIndex]
           if (!f) return null
-          if (it.rowIndex === -1) {
+          if (it.isHeader) {
             const { dir: d, name: n } = split(f.path)
+            const isHere = it.isFolded && it.fileIndex === current?.fileIndex
+            const fileNoted = f.hunks.reduce((c, x) => c + forHunk(allComments, f.path, x.id).length, 0)
             return (
-              <Text wrap="truncate-end">
-                <Text color={pal.accent}>{'▾ '}</Text>
-                <Text bold color={pal.text}>{n}</Text>
-                {!isTiny && <Text color={pal.muted}> {d}  </Text>}
-                {!isTiny && counts(f.hunks.reduce((a, x) => a + x.added, 0), f.hunks.reduce((a, x) => a + x.removed, 0))}
-              </Text>
+              <Box width={W} backgroundColor={isHere ? pal.selected : undefined}>
+                <Button key={`file-${it.fileIndex}`} plain onPress={() => {
+                  const firstRow = rows.findIndex(r => r.fileIndex === it.fileIndex)
+                  // Automatic folding opens a file by selecting it; explicit folding toggles.
+                  if (fold.isAuto && it.isFolded) return select($, firstRow)
+                  return select($, firstRow).then(() => toggleFold($))
+                }}>
+                  <Text wrap="truncate-end">
+                    <Text color={pal.accent}>{isHere ? '▎' : ' '}</Text>
+                    <Text color={pal.accent}>{it.isFolded ? '▸ ' : '▾ '}</Text>
+                    <Text bold color={pal.text}>{n}</Text>
+                    {!isTiny && <Text color={pal.muted}> {d}  </Text>}
+                    {!isTiny && counts(f.hunks.reduce((a, x) => a + x.added, 0), f.hunks.reduce((a, x) => a + x.removed, 0))}
+                    {it.isFolded && !isTiny && <Text color={pal.muted}>  {f.hunks.length} hunk{f.hunks.length === 1 ? '' : 's'}</Text>}
+                    {fileNoted > 0 && <Text color={pal.accent}> ✎</Text>}
+                  </Text>
+                </Button>
+              </Box>
             )
           }
           const isSelected = it.rowIndex === selected
@@ -637,6 +727,7 @@ export const register: Register = (on, options) => {
             </Box>
           )
         })}
+        {hasBelow && <Text color={pal.muted}>  ▼ {items.length - first - listSize + 1} more below</Text>}
         {rows.length === 0 && <Text color={pal.muted}>Nothing to review. Changes Claude makes show up here.</Text>}
 
         <Box flexDirection="column" flexGrow={1} borderStyle="round" borderColor={pal.border} marginTop={0}>
@@ -653,7 +744,10 @@ export const register: Register = (on, options) => {
             </Text>
           </Box>
           <Box flexDirection="column" flexGrow={1} width={IW} backgroundColor={pal.bg}>
-            {!hunk && file && <Text color={pal.muted}>  {file.kind} file: accept or undo it as a whole.</Text>}
+            {!hunk && file && isFileFolded && (
+              <Text color={pal.muted} wrap="wrap">  {file.hunks.length} hunk{file.hunks.length === 1 ? '' : 's'} folded. t opens the file; a / u accept or undo all of it.</Text>
+            )}
+            {!hunk && file && !isFileFolded && <Text color={pal.muted}>  {file.kind} file: accept or undo it as a whole.</Text>}
             {shown.flatMap((l, shownIndex) => {
               const isChanged = l.kind === 'add' || l.kind === 'del'
               const isCursor = offset + shownIndex === cursor
@@ -730,6 +824,10 @@ export const register: Register = (on, options) => {
         <Box flexWrap="wrap" columnGap={2}>
           {hotkey('j', 'next', () => move($, 1))}
           {hotkey('k', 'prev', () => move($, -1))}
+          {hotkey('l', 'next file', () => moveFile($, 1))}
+          {hotkey('h', 'prev file', () => moveFile($, -1))}
+          {hotkey('t', 'fold', () => toggleFold($))}
+          {hotkey('o', 'fold all', () => toggleFoldAll($))}
           {hotkey('n', 'next line', () => moveCursor($, 1))}
           {hotkey('p', 'prev line', () => moveCursor($, -1))}
           {hotkey('s', 'scroll ↓', () => scrollDiff($, 1))}
@@ -739,8 +837,8 @@ export const register: Register = (on, options) => {
           {hotkey('q', 'close', () => $.ui.close({ id: PANE }))}
         </Box>
         <Box flexWrap="wrap" columnGap={2}>
-          {hotkey('a', 'accept', () => act($, 'accept', 'row'), pal.addFg)}
-          {hotkey('u', 'undo', () => act($, 'undo', 'row'), pal.delFg)}
+          {hotkey('a', 'accept', () => actSelected($, 'accept'), pal.addFg)}
+          {hotkey('u', 'undo', () => actSelected($, 'undo'), pal.delFg)}
           {hotkey('f', 'accept file', () => act($, 'accept', 'file'), pal.addFg)}
           {hotkey('d', 'undo file', () => act($, 'undo', 'file'), pal.delFg)}
           {hotkey('y', 'accept all', () => act($, 'accept', 'all'), pal.addFg)}

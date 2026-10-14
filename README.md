@@ -33,6 +33,9 @@ While Claude works the list updates live. When a turn leaves changes you get a t
 | Key | Action |
 | --- | --- |
 | `j` / `k` | next / previous hunk |
+| `h` / `l` | previous / next file |
+| `t` | fold or unfold the selected file (clicking a file header does the same) |
+| `o` | fold all files, or open them all |
 | `n` / `p` | move the line cursor inside the hunk |
 | `s` / `w` | scroll a long hunk |
 | `a` / `u` | accept / undo the hunk |
@@ -62,6 +65,10 @@ Everything the pane does also works as plain commands, in any terminal width (th
 ```
 
 Numbers are the ones `/hunks list` prints. Because command output is part of the conversation, Claude sees it too.
+
+### Big reviews
+
+With more than 12 changed files the list opens one file at a time: the selected file shows its hunks, the rest are single rows, and moving to another file opens it. Press `t` or `o` (or click a file) to take over folding yourself. A folded file is one row; `a` / `u` on it accept or undo the whole file. The list scrolls, with `▲ n more above` / `▼ n more below` markers. `/hunks list` summarises a big review per file; `/hunks list <part of a path>` lists the hunks of the files it matches, numbered as in the whole review. `/hunks demo big` opens 40 sample files to try it.
 
 ### Comments
 

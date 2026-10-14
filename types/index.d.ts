@@ -54,6 +54,9 @@ export type ReviewComment = {
   createdAt: number
 }
 
+/** Which files of the list are folded; `isAuto` keeps only the selected file open in a big review. */
+export type ReviewFold = { isAuto: boolean; paths: string[] }
+
 /** One row of the review list: a hunk, or a file that has no hunks (binary, mode change). */
 export type ReviewRow = { fileIndex: number; hunkIndex: number }
 
@@ -75,6 +78,7 @@ declare module 'claude-code' {
       composing: string
       /** Line cursor inside the selected hunk's diff: an index into its lines, -1 for none. */
       cursor: number
+      fold: ReviewFold
       /** `<columns>×<rows>` for a moment after the pane is resized; empty otherwise. */
       resize: string
     }
