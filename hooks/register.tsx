@@ -323,6 +323,8 @@ const startComment = async ($: Api) => {
   const key = keyOf(picked.file.path, picked.hunk.id, target.line, target.isOld)
   await update($, composingAtom, now => (now === key ? '' : key))
   await say($, '')
+  // An Input drawn after the pane took the keyboard does not take the ring by itself.
+  if ((await read($, composingAtom)) === key) await $.ui.focus({ requestId: PANE, key: 'comment' }).catch(() => undefined)
 }
 
 /** Writes, rewrites or (empty text) removes the comment on one line of a hunk; says what happened. */
